@@ -1,1 +1,24 @@
 # recipe-scraper-mlops
+
+This project implements an end-to-end ML pipeline that , built around the oen-source recipe manager Mealie (https://github.com/mealie-recipes/mealie). We introduce an ML feature that takes scraped recipes from the internet that may contain formatting issues or mistakes and produces neatly formatted and corrected recipes for users to save in their Mealie app.
+This is a course project for *Machine Learning Systems Engineering & Operations (ECE-GY 9183, Spring 2026, NYU Tandon)*.
+
+## Project structure
+```text
+recipe-scraper-mlops/ 
+├── devops/ # Docker, deployment, and infrastructure setup 
+├── serving/ # Inference API (FastAPI) 
+├── training/ # Model training pipeline 
+├── data/ # Scraping and data processing scripts 
+├── shared/ # Example inputs/outputs and shared schemas 
+└── README.md
+```
+
+## Current Status
+Initial implementation in progress. We are currently setting up the core components for data processing, model training, inference serving, and deployment.
+
+## Team
+- **Training:** Yathin Reddy Duvuru
+- **Serving:** Grace McGrath
+- **Data:** Shruti Sridhar
+- **DevOps/Platform:** Sofia Papathanasiou
