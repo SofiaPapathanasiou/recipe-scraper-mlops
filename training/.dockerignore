@@ -1,0 +1,44 @@
+# =============================================================================
+# training/.dockerignore
+# Prevents large/sensitive files from being sent to the Docker build context.
+# This keeps builds fast and the image small.
+# =============================================================================
+
+# Downloaded datasets and model checkpoints (large — pulled at runtime from MinIO)
+data/
+checkpoints/
+.cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment files (secrets must never bake into image layers)
+.env
+.env.*
+
+# Git history (not needed in container)
+.git/
+.gitignore
+
+# Dev tools
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks (run outside the training container)
+notebooks/
+*.ipynb
+
+# macOS
+.DS_Store
+
+# Editor configs
+.vscode/
+.idea/
