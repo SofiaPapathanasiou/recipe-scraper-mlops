@@ -33,13 +33,13 @@ WORKDIR /app
 
 # Install Python dependencies (cached independently of source changes)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
+RUN uv sync --frozen --group dev
 
 ENV VIRTUAL_ENV="/app/.venv"
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Default workspace layout (compose bind-mounts will overlay these)
-WORKDIR /app/training
+WORKDIR /app/
 
 # Keep defaults consistent with runtime image
 ENV PYTHONUNBUFFERED=1 \
@@ -51,7 +51,7 @@ ENV PYTHONUNBUFFERED=1 \
     MLFLOW_S3_ENDPOINT_URL=http://minio:9000
 
 # Create expected dirs (helps when volumes aren't mounted yet)
-RUN mkdir -p /app/.cache/huggingface /app/checkpoints /app/data/raw /app/data/processed /app/notebooks /app/training
+RUN mkdir -p /app/.cache/huggingface /app/training/checkpoints /app/training/data/raw /app/training/data/processed /app/training/notebooks
 
 # Non-root user (matches typical host UID for clean bind-mount permissions)
 RUN useradd -m -u 1000 trainer \
