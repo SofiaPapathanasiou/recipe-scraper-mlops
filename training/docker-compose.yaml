@@ -12,6 +12,7 @@ volumes:
   postgres-data:
   redis-data:
   jupyter-data:        # persists notebooks across container restarts
+  jupyter-venv:        # persists /app/.venv (avoids bind-mount masking)
 
 services:
 
@@ -185,19 +186,15 @@ services:
       # Leave blank to get a random token (more secure, less convenient)
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
     volumes:
-      # Bind-mount ./notebooks so files are committed to git
-      - ./notebooks:/app/notebooks
-      # Also mount training source so you can import from it in notebooks
-      - .:/app/training
-      - ./data:/app/data
-    working_dir: /app/notebooks
+      - .:/app/training/
+    working_dir: /app/training/notebooks
     # Override the training CMD — launch Jupyter Lab instead
     command: >
       jupyter lab
         --ip=0.0.0.0
         --port=8888
         --no-browser
-        --notebook-dir=/app/notebooks
+        --notebook-dir=/app/training/notebooks
         --ServerApp.token=${JUPYTER_TOKEN:-}
         --ServerApp.password=''
         --ServerApp.allow_origin='*'
