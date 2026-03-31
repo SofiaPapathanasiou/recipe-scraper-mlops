@@ -106,7 +106,7 @@ services:
     networks:
       - mlops-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -204,14 +204,6 @@ services:
         --ServerApp.disable_check_xsrf=True
     networks:
       - mlops-net
-    # GPU access — useful for running inference experiments in notebooks
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   # ── 6. Training Container ─ T5 fine-tuning job ───────────────────────────
   # Run on-demand (not always-on). Start with:
@@ -257,10 +249,3 @@ services:
       - ./data:/app/data
     networks:
       - mlops-net
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
