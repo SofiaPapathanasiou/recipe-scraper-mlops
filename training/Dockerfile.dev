@@ -9,7 +9,8 @@
 # Run:     docker compose up jupyter
 # =============================================================================
 
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime AS dev
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE} AS builder
 
 LABEL maintainer="mlops-class"
 LABEL description="T5 recipe correction dev container (interactive)"

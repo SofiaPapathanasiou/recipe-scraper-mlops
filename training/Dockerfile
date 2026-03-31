@@ -13,7 +13,8 @@
 # =============================================================================
 
 # ── Stage 1: dependency builder ───────────────────────────────────────────────
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime AS builder
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE} AS builder
 
 # Build-time only tools (not copied to final image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,7 +33,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime AS runtime
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE} AS runtime
 
 LABEL maintainer="mlops-class"
 LABEL description="T5 recipe correction training container"
