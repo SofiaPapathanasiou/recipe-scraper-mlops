@@ -22,16 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create an isolated virtualenv so the runtime stage gets a clean copy
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Upgrade pip first — older pip misresolves some HuggingFace deps
-RUN pip install --no-cache-dir --upgrade pip wheel setuptools
-
-# Install Python dependencies
-# Copied before source code so Docker layer cache is reused on code-only changes
-COPY requirements.txt /tmp/requirements.txt
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 
@@ -49,11 +45,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the virtualenv from builder — no pip/gcc/make in final image
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-# Ensures Python uses the venv even if called as `python3`
-ENV VIRTUAL_ENV="/opt/venv"
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=builder /app/.venv /app/.venv
+
+ENV VIRTUAL_ENV="/app/.venv"
+ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 

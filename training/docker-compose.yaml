@@ -156,7 +156,7 @@ services:
   jupyter:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: jupyter
     restart: unless-stopped
     ports:
@@ -221,6 +221,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: training
+    profiles: ["training"]
     restart: "no"        # One-shot job, not a daemon
     depends_on:
       mlflow:

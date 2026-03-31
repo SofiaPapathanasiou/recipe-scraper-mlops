@@ -1,0 +1,61 @@
+# =============================================================================
+# Dev Container — T5 Recipe Correction (Interactive)
+# =============================================================================
+# Purpose:
+# - Interactive development (Jupyter/IPython/shell) with build tools available
+# - Fast iteration with bind-mounts (code/notebooks/data)
+#
+# Build:   docker compose build jupyter
+# Run:     docker compose up jupyter
+# =============================================================================
+
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime AS dev
+
+LABEL maintainer="mlops-class"
+LABEL description="T5 recipe correction dev container (interactive)"
+
+# System deps for interactive/dev work
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        curl \
+        less \
+        vim-tiny \
+        # libgomp1 is required by some HuggingFace tokenizer backends
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (same mechanism as training Dockerfile)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Install Python dependencies (cached independently of source changes)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
+
+ENV VIRTUAL_ENV="/app/.venv"
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Default workspace layout (compose bind-mounts will overlay these)
+WORKDIR /app/training
+
+# Keep defaults consistent with runtime image
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TOKENIZERS_PARALLELISM=false \
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface/hub \
+    MLFLOW_TRACKING_URI=http://mlflow:5000 \
+    MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+
+# Create expected dirs (helps when volumes aren't mounted yet)
+RUN mkdir -p /app/.cache/huggingface /app/checkpoints /app/data/raw /app/data/processed /app/notebooks /app/training
+
+# Non-root user (matches typical host UID for clean bind-mount permissions)
+RUN useradd -m -u 1000 trainer \
+  && chown -R trainer:trainer /app
+USER trainer
+
+# Dev default: shell (compose overrides command to Jupyter)
+CMD ["bash"]
