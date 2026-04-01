@@ -18,6 +18,7 @@ dependencies = [
     "scikit-learn>=1.4.0",
     "torchvision>=0.26.0",
     "torchaudio>=2.11.0",
+    "evaluate>=0.4.6",
 ]
 
 [dependency-groups]
