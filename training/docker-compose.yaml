@@ -50,13 +50,17 @@ services:
       - mlops-net
     entrypoint: >
       /bin/sh -c "
-        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+        echo 'Waiting for MinIO...';
+        until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123}; do
+          sleep 2;
+        done;
+        echo 'Creating buckets...';
         mc mb --ignore-existing local/mlflow-artifacts;
         mc mb --ignore-existing local/recipe-datasets;
         mc mb --ignore-existing local/model-registry;
         mc mb --ignore-existing local/production-feedback;
-        echo 'Buckets created.';
-      "
+        echo 'MinIO setup complete.';
+        "
 
   # ── 2. PostgreSQL ─ MLFlow metadata backend ──────────────────────────────
   # Replaces SQLite. Handles concurrent writes and survives restarts cleanly.
@@ -87,30 +91,40 @@ services:
     container_name: mlflow
     restart: unless-stopped
     ports:
-      - "5000:5000"      # MLFlow UI → http://localhost:5000
+      - "5000:5000"
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-    command: >
-      bash -c "pip install psycopg2-binary boto3 -q &&
-               mlflow server
-                 --backend-store-uri postgresql://${POSTGRES_USER:-mlflow}:${POSTGRES_PASSWORD:-mlflow123}@postgres:5432/${POSTGRES_DB:-mlflow}
-                 --default-artifact-root s3://mlflow-artifacts/
-                 --host 0.0.0.0
-                 --port 5000"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      POSTGRES_USER: ${POSTGRES_USER:-mlflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
+      POSTGRES_DB: ${POSTGRES_DB:-mlflow}
+    command:
+      - bash
+      - -c
+      - |
+        pip install psycopg2-binary boto3 -q &&
+        mlflow server \
+          --backend-store-uri postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB \
+          --default-artifact-root s3://mlflow-artifacts \
+          --host 0.0.0.0 \
+          --port 5000
     networks:
       - mlops-net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000')"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 90s  
 
   # ── 3. Redis ─ Feature store + Production feedback queue ─────────────────
   # Used for:
@@ -176,10 +190,10 @@ services:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET_DATASETS: recipe-datasets
-      MINIO_BUCKET_MODELS: model-registry
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
+      MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
       # Jupyter config
       JUPYTER_ENABLE_LAB: "yes"
       # Set a fixed token via .env — avoids hunting through logs every restart
@@ -227,20 +241,20 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       # MinIO
       MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET_DATASETS: recipe-datasets
-      MINIO_BUCKET_MODELS: model-registry
+      MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
+      MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
       # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
       # Training config (override via .env or CLI)
-      MODEL_NAME: t5-small
-      MAX_INPUT_LENGTH: 512
-      MAX_TARGET_LENGTH: 512
-      TRAIN_BATCH_SIZE: 8
-      EVAL_BATCH_SIZE: 8
-      NUM_EPOCHS: 3
-      LEARNING_RATE: 3e-4
-      EXPERIMENT_NAME: recipe-correction-t5
+      MODEL_NAME: ${MODEL_NAME:-t5-small}
+      MAX_INPUT_LENGTH: ${MAX_INPUT_LENGTH:-512}
+      MAX_TARGET_LENGTH: ${MAX_TARGET_LENGTH:-512}
+      TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE:-8}
+      EVAL_BATCH_SIZE: ${EVAL_BATCH_SIZE:-8}
+      NUM_EPOCHS: ${NUM_EPOCHS:-3}
+      LEARNING_RATE: ${LEARNING_RATE:-0.0003}
+      EXPERIMENT_NAME: ${EXPERIMENT_NAME:-recipe-correction-t5}
     volumes:
       - .:/app
       - ./data:/app/data
