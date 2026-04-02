@@ -100,6 +100,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
+      MLFLOW_HTTP_GATEWAY_ALLOW_HOSTS: "*"
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
@@ -107,6 +108,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-mlflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
       POSTGRES_DB: ${POSTGRES_DB:-mlflow}
+      GUNICORN_CMD_ARGS: "--proxy-allow-from * --forwarded-allow-ips *"
     command:
       - bash
       - -c
@@ -196,23 +198,35 @@ services:
       REDIS_PORT: ${REDIS_PORT:-6379}
       # Jupyter config
       JUPYTER_ENABLE_LAB: "yes"
+      TORCH_BUILD_MODE: ${TORCH_BUILD_MODE:-auto}
+      TORCH_VERSION: ${TORCH_VERSION:-2.11.0}
+      TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.26.0}
+      TORCHAUDIO_VERSION: ${TORCHAUDIO_VERSION:-2.11.0}
+      PYTORCH_CPU_INDEX_URL: ${PYTORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+      PYTORCH_GPU_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:-}
       # Set a fixed token via .env — avoids hunting through logs every restart
       # Leave blank to get a random token (more secure, less convenient)
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
+      JUPYTER_LAB_EXTENSION_MANAGER: "none"
     volumes:
       - .:/app/training/
     working_dir: /app/training/notebooks
+    gpus: all
     # Override the training CMD — launch Jupyter Lab instead
     command: >
-      jupyter lab
-        --ip=0.0.0.0
-        --port=8888
-        --no-browser
-        --notebook-dir=/app/training/notebooks
-        --ServerApp.token=${JUPYTER_TOKEN:-}
-        --ServerApp.password=''
-        --ServerApp.allow_origin='*'
-        --ServerApp.disable_check_xsrf=True
+      bash -lc "
+        /app/training/scripts/select_torch_build.sh &&
+        exec jupyter lab
+          --ip=0.0.0.0
+          --port=8888
+          --no-browser
+          --allow-root
+          --notebook-dir=/app/training/notebooks
+          --ServerApp.token=${JUPYTER_TOKEN:-}
+          --ServerApp.password=''
+          --ServerApp.allow_origin='*'
+          --ServerApp.disable_check_xsrf=True
+      "
     networks:
       - mlops-net
 
@@ -258,5 +272,6 @@ services:
     volumes:
       - .:/app
       - ./data:/app/data
+    gpus: all
     networks:
       - mlops-net

@@ -38,8 +38,12 @@ RUN uv sync --frozen --group dev
 ENV VIRTUAL_ENV="/app/.venv"
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN useradd -m -u 1000 trainer
+
 # Default workspace layout (compose bind-mounts will overlay these)
 WORKDIR /app/
+
+COPY --chown=trainer:trainer pyproject.toml uv.lock ./
 
 # Keep defaults consistent with runtime image
 ENV PYTHONUNBUFFERED=1 \
@@ -52,11 +56,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Create expected dirs (helps when volumes aren't mounted yet)
 RUN mkdir -p /app/.cache/huggingface /app/training/checkpoints /app/training/data/raw /app/training/data/processed /app/training/notebooks
-
-# Non-root user (matches typical host UID for clean bind-mount permissions)
-RUN useradd -m -u 1000 trainer \
-  && chown -R trainer:trainer /app
-USER trainer
 
 # Dev default: shell (compose overrides command to Jupyter)
 CMD ["bash"]
