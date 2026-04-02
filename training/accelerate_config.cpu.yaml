@@ -1,0 +1,6 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: NO
+num_processes: 1
+mixed_precision: no
+dynamo_backend: no
+use_cpu: true

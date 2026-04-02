@@ -1,0 +1,41 @@
+model:
+  name: t5-small
+  task_prefix: "fix recipe: "
+
+tokenization:
+  max_input_length: 512
+  max_target_length: 512
+
+training:
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  num_epochs: 3
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.06
+  max_grad_norm: 1.0
+  seed: 42
+
+evaluation:
+  logging_steps: 50
+  eval_steps: 500
+  metric_for_best_model: eval_rougeL
+
+checkpointing:
+  checkpoint_dir: /app/checkpoints/recipe-correction
+  load_best_model_at_end: true
+
+mlflow:
+  experiment_name: recipe-correction-t5
+  tracking_uri: http://mlflow:5000
+  register_model: true
+  registered_model_name: recipe-correction-t5
+
+data:
+  source: mock
+  mock_train_size: 200
+  mock_val_size: 40
+  minio_bucket: recipe-datasets
+  minio_train_key: train.jsonl
+  minio_val_key: val.jsonl
