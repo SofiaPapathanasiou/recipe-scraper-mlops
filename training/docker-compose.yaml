@@ -1,7 +1,33 @@
-# ─────────────────────────────────────────────
-# Recipe Correction MLOps Stack
-# Services: MinIO · PostgreSQL · MLFlow · Redis · Jupyter · Training
-# ─────────────────────────────────────────────
+# Recipe correction MLOps stack
+# Services: MinIO, PostgreSQL, MLflow, Redis, Redis Insight, Jupyter, Training
+
+x-mlops-network: &mlops-network
+  networks:
+    - mlops-net
+
+x-minio-credentials: &minio-credentials
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+
+x-runtime-env: &runtime-env
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+  MINIO_ENDPOINT: minio:9000
+  MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
+  MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  <<: *minio-credentials
+
+x-runtime-depends-on: &runtime-depends-on
+  mlflow:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+  redis:
+    condition: service_healthy
 
 networks:
   mlops-net:
@@ -11,87 +37,75 @@ volumes:
   minio-data:
   postgres-data:
   redis-data:
-  jupyter-data:        # persists notebooks across container restarts
-  jupyter-venv:        # persists /app/.venv (avoids bind-mount masking)
 
 services:
-
-  # ── 1. MinIO ─ S3-compatible object storage ──────────────────────────────
-  # Stores: raw datasets, processed data, model artifacts, MLFlow artifacts
   minio:
     image: minio/minio:latest
     container_name: minio
     restart: unless-stopped
-    ports:
-      - "9000:9000"      # S3 API
-      - "9001:9001"      # Web console → http://localhost:9001
+    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio-data:/data
-    networks:
-      - mlops-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
+    <<: *mlops-network
 
-  # Automatically create required buckets on first startup
   minio-init:
     image: minio/mc:latest
     container_name: minio-init
+    restart: "no"
     depends_on:
       minio:
         condition: service_healthy
-    networks:
-      - mlops-net
-    entrypoint: >
-      /bin/sh -c "
-        echo 'Waiting for MinIO...';
-        until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123}; do
-          sleep 2;
-        done;
-        echo 'Creating buckets...';
-        mc mb --ignore-existing local/mlflow-artifacts;
-        mc mb --ignore-existing local/recipe-datasets;
-        mc mb --ignore-existing local/model-registry;
-        mc mb --ignore-existing local/production-feedback;
-        echo 'MinIO setup complete.';
-        "
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        echo "Waiting for MinIO..."
+        until mc alias set local http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin123}"; do
+          sleep 2
+        done
+        echo "Creating buckets..."
+        mc mb --ignore-existing local/mlflow-artifacts
+        mc mb --ignore-existing local/recipe-datasets
+        mc mb --ignore-existing local/model-registry
+        mc mb --ignore-existing local/production-feedback
+        echo "MinIO setup complete."
+    <<: *mlops-network
 
-  # ── 2. PostgreSQL ─ MLFlow metadata backend ──────────────────────────────
-  # Replaces SQLite. Handles concurrent writes and survives restarts cleanly.
   postgres:
     image: postgres:16-alpine
     container_name: postgres
     restart: unless-stopped
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mlflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
       POSTGRES_DB: ${POSTGRES_DB:-mlflow}
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    networks:
-      - mlops-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlflow}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlflow} -d ${POSTGRES_DB:-mlflow}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    <<: *mlops-network
 
-  # ── 3. MLFlow ─ Experiment tracking + Model Registry ────────────────────
-  # Backend: PostgreSQL | Artifact store: MinIO (S3-compatible)
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
     restart: unless-stopped
-    ports:
-      - "5000:5000"
+    init: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,167 +114,114 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
+      # Tracking server (uvicorn): Host header must match (browser sends host:port). Override in .env for public DNS or IPs.
+      # Patterns: 10.*, 172.*, 192.168.* (see MLflow network security docs). Add explicit host:5000 if still rejected.
+      MLFLOW_SERVER_ALLOWED_HOSTS: ${MLFLOW_SERVER_ALLOWED_HOSTS:-mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000,0.0.0.0,192.168.*,10.*,172.*}
       MLFLOW_HTTP_GATEWAY_ALLOW_HOSTS: "*"
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       AWS_S3_FORCE_PATH_STYLE: "true"
       POSTGRES_USER: ${POSTGRES_USER:-mlflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
       POSTGRES_DB: ${POSTGRES_DB:-mlflow}
       GUNICORN_CMD_ARGS: "--proxy-allow-from * --forwarded-allow-ips *"
+      <<: *minio-credentials
     command:
       - bash
-      - -c
+      - -lc
       - |
-        pip install psycopg2-binary boto3 -q &&
-        mlflow server \
-          --backend-store-uri postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB \
-          --default-artifact-root s3://mlflow-artifacts \
+        pip install psycopg2-binary boto3 -q && \
+        exec mlflow server \
+          --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
+          --default-artifact-root "s3://mlflow-artifacts" \
           --host 0.0.0.0 \
           --port 5000
-    networks:
-      - mlops-net
+    ports:
+      - "5000:5000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000')"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s  
+      start_period: 90s
+    <<: *mlops-network
 
-  # ── 3. Redis ─ Feature store + Production feedback queue ─────────────────
-  # Used for:
-  #   - Caching recipe feature vectors (tokenized inputs) during serving
-  #   - Queuing user feedback (corrected recipes) for retraining trigger
-  #   - Tracking retraining metadata (last_retrain_ts, feedback_count, etc.)
   redis:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
+    command: redis-server /usr/local/etc/redis/redis.conf
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf
-    networks:
-      - mlops-net
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
+    <<: *mlops-network
 
-  # ── 4. Redis Insight ─ GUI for Redis ─────────────────────────────────────
   redis-insight:
     image: redis/redisinsight:latest
     container_name: redis-insight
     restart: unless-stopped
-    ports:
-      - "5540:5540"      # Redis GUI → http://localhost:5540
     depends_on:
-      - redis
-    networks:
-      - mlops-net
+      redis:
+        condition: service_healthy
+    ports:
+      - "5540:5540"
+    <<: *mlops-network
 
-  # ── 5. Jupyter Lab ─ Interactive experimentation ─────────────────────────
-  # Uses the same image as the training container so imports match exactly.
-  # Notebooks are persisted in a named volume AND bind-mounted to ./notebooks
-  # so they're committed to git alongside the code.
-  #
-  # Access: http://localhost:8888  (token printed in logs on first start)
-  # To get the token: docker compose logs jupyter | grep token
   jupyter:
     build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: jupyter
     restart: unless-stopped
+    init: true
+    depends_on: *runtime-depends-on
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      JUPYTER_LAB_EXTENSION_MANAGER: "none"
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
+      TORCH_BUILD_MODE: ${TORCH_BUILD_MODE:-auto}
+      PROJECT_ROOT: /workspace
+      VENV_PATH: /opt/venv
+      <<: *runtime-env
+    working_dir: /workspace/notebooks
+    command:
+      - bash
+      - -lc
+      - |
+        bash /workspace/scripts/select_torch_build.sh && \
+        exec /opt/venv/bin/jupyter lab \
+          --ip=0.0.0.0 \
+          --port=8888 \
+          --no-browser \
+          --allow-root \
+          --notebook-dir=/workspace/notebooks \
+          --ServerApp.token="${JUPYTER_TOKEN:-}" \
+          --ServerApp.password='' \
+          --ServerApp.allow_origin='*' \
+          --ServerApp.disable_check_xsrf=True
     ports:
       - "8888:8888"
-    depends_on:
-      mlflow:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      # Same env as training — notebooks can call train.py helpers directly
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
-      MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      # Jupyter config
-      JUPYTER_ENABLE_LAB: "yes"
-      TORCH_BUILD_MODE: ${TORCH_BUILD_MODE:-auto}
-      TORCH_VERSION: ${TORCH_VERSION:-2.11.0}
-      TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.26.0}
-      TORCHAUDIO_VERSION: ${TORCHAUDIO_VERSION:-2.11.0}
-      PYTORCH_CPU_INDEX_URL: ${PYTORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-      PYTORCH_GPU_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:-}
-      # Set a fixed token via .env — avoids hunting through logs every restart
-      # Leave blank to get a random token (more secure, less convenient)
-      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
-      JUPYTER_LAB_EXTENSION_MANAGER: "none"
     volumes:
-      - .:/app/training/
-    working_dir: /app/training/notebooks
+      - .:/workspace
     gpus: all
-    # Override the training CMD — launch Jupyter Lab instead
-    command: >
-      bash -lc "
-        /app/training/scripts/select_torch_build.sh &&
-        exec jupyter lab
-          --ip=0.0.0.0
-          --port=8888
-          --no-browser
-          --allow-root
-          --notebook-dir=/app/training/notebooks
-          --ServerApp.token=${JUPYTER_TOKEN:-}
-          --ServerApp.password=''
-          --ServerApp.allow_origin='*'
-          --ServerApp.disable_check_xsrf=True
-      "
-    networks:
-      - mlops-net
+    <<: *mlops-network
 
-  # ── 6. Training Container ─ T5 fine-tuning job ───────────────────────────
-  # Run on-demand (not always-on). Start with:
-  #   docker compose run --rm training python train.py
   training:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: training
-    profiles: ["training"]
-    restart: "no"        # One-shot job, not a daemon
-    depends_on:
-      mlflow:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    profiles:
+      - training
+    restart: "no"
+    depends_on: *runtime-depends-on
     environment:
-      # MLFlow
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      # MinIO
-      MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
-      MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
-      # Redis
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      # Training config (override via .env or CLI)
       MODEL_NAME: ${MODEL_NAME:-t5-small}
       MAX_INPUT_LENGTH: ${MAX_INPUT_LENGTH:-512}
       MAX_TARGET_LENGTH: ${MAX_TARGET_LENGTH:-512}
@@ -269,9 +230,8 @@ services:
       NUM_EPOCHS: ${NUM_EPOCHS:-3}
       LEARNING_RATE: ${LEARNING_RATE:-0.0003}
       EXPERIMENT_NAME: ${EXPERIMENT_NAME:-recipe-correction-t5}
+      <<: *runtime-env
     volumes:
       - .:/app
-      - ./data:/app/data
     gpus: all
-    networks:
-      - mlops-net
+    <<: *mlops-network

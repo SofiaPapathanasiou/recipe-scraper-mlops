@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VENV_PYTHON="${VIRTUAL_ENV:-/app/.venv}/bin/python"
-
-TORCH_VERSION="${TORCH_VERSION:-2.11.0}"
-TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.26.0}"
-TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.11.0}"
-
-CPU_INDEX_URL="${PYTORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
-GPU_INDEX_URL="${PYTORCH_GPU_INDEX_URL:-}"
+PROJECT_ROOT="${PROJECT_ROOT:-/workspace}"
+VENV_PATH="${VENV_PATH:-/opt/venv}"
+VENV_PYTHON="${VENV_PATH}/bin/python"
 TORCH_BUILD_MODE="${TORCH_BUILD_MODE:-auto}"
 
 gpu_visible=0
@@ -19,8 +14,6 @@ elif [[ -n "${NVIDIA_VISIBLE_DEVICES:-}" && "${NVIDIA_VISIBLE_DEVICES}" != "void
 fi
 
 target_build="cpu"
-index_url="${CPU_INDEX_URL}"
-torch_spec="torch==${TORCH_VERSION}+cpu torchvision==${TORCHVISION_VERSION}+cpu torchaudio==${TORCHAUDIO_VERSION}+cpu"
 
 case "${TORCH_BUILD_MODE}" in
     gpu)
@@ -40,19 +33,24 @@ case "${TORCH_BUILD_MODE}" in
         ;;
 esac
 
+target_extra="torch-cpu"
 if [[ "${target_build}" == "gpu" ]]; then
-    if [[ -z "${GPU_INDEX_URL}" ]]; then
-        echo "GPU requested but PYTORCH_GPU_INDEX_URL is not set." >&2
-        exit 1
-    fi
-    index_url="${GPU_INDEX_URL}"
-    torch_spec="torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION}"
+    target_extra="torch-gpu"
 fi
 
 echo "Selecting PyTorch build: ${target_build}"
-echo "Using wheel index: ${index_url}"
+echo "Syncing uv extra: ${target_extra}"
 
-"${VENV_PYTHON}" -m pip install --no-cache-dir --upgrade --index-url "${index_url}" ${torch_spec}
+cd "${PROJECT_ROOT}"
+
+if [[ ! -x "${VENV_PYTHON}" ]]; then
+    echo "Recreating missing virtual environment at ${VENV_PATH}"
+    uv venv "${VENV_PATH}" --python 3.11
+fi
+
+export VIRTUAL_ENV="${VENV_PATH}"
+export PATH="${VENV_PATH}/bin:${PATH}"
+uv sync --frozen --active --group dev --extra "${target_extra}"
 
 "${VENV_PYTHON}" - <<'PY'
 import torch
@@ -61,4 +59,7 @@ print(f"torch={torch.__version__}")
 print(f"cuda_built={torch.backends.cuda.is_built()}")
 print(f"cuda_available={torch.cuda.is_available()}")
 print(f"cuda_device_count={torch.cuda.device_count() if torch.cuda.is_available() else 0}")
+
+if torch.__version__.endswith("+cpu") and torch.backends.cuda.is_built():
+    raise SystemExit("Torch install verification failed: unexpected mixed CPU/CUDA state.")
 PY

@@ -3,11 +3,10 @@ name = "recipe-correction-training"
 version = "0.1.0"
 requires-python = ">=3.10"
 
-# Core deps — needed by both training and dev containers.
-# PyTorch is installed from this CPU index by default, then the Jupyter
-# container can replace it at startup with a GPU wheel when GPUs are exposed.
+# Core deps — shared by the training and dev containers.
+# Torch is selected via mutually exclusive extras so uv can keep the lockfile
+# reproducible without mutating the environment by hand at container startup.
 dependencies = [
-    "torch>=2.2.0",
     "transformers>=4.40.0",
     "datasets>=2.19.0",
     "mlflow>=2.12.0",
@@ -18,9 +17,22 @@ dependencies = [
     "sacrebleu>=2.4.0",
     "pyyaml>=6.0",
     "scikit-learn>=1.4.0",
-    "torchvision>=0.26.0",
-    "torchaudio>=2.11.0",
     "evaluate>=0.4.6",
+]
+
+[project.optional-dependencies]
+torch-cpu = [
+    "torch==2.11.0+cpu; sys_platform != 'darwin'",
+    "torch==2.11.0; sys_platform == 'darwin'",
+    "torchvision==0.26.0+cpu; sys_platform != 'darwin'",
+    "torchvision==0.26.0; sys_platform == 'darwin'",
+    "torchaudio==2.11.0+cpu; sys_platform != 'darwin'",
+    "torchaudio==2.11.0; sys_platform == 'darwin'",
+]
+torch-gpu = [
+    "torch==2.5.1+cu121",
+    "torchvision==0.20.1+cu121",
+    "torchaudio==2.5.1+cu121",
 ]
 
 [dependency-groups]
@@ -33,5 +45,34 @@ dev = [
     "pytest>=8.0.0",
 ]
 
+[tool.uv]
+conflicts = [
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-gpu" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu121", extra = "torch-gpu" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu121", extra = "torch-gpu" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu121", extra = "torch-gpu" },
+]
+
 [[tool.uv.index]]
+name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
