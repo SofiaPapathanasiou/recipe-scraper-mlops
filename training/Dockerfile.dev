@@ -50,13 +50,13 @@ COPY --chown=trainer:trainer pyproject.toml uv.lock ./
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TOKENIZERS_PARALLELISM=false \
-    HF_HOME=/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface/hub \
+    HF_HOME=/tmp/huggingface \
+    TRANSFORMERS_CACHE=/tmp/huggingface/hub \
     MLFLOW_TRACKING_URI=http://mlflow:5000 \
     MLFLOW_S3_ENDPOINT_URL=http://minio:9000
 
 # Create expected dirs (helps when volumes aren't mounted yet)
-RUN mkdir -p /opt/venv /app/.cache/huggingface /workspace/checkpoints /workspace/data/raw /workspace/data/processed /workspace/notebooks
+RUN mkdir -p /opt/venv /tmp/huggingface /workspace/checkpoints /workspace/data/raw /workspace/data/processed /workspace/notebooks
 
 # Dev default: shell (compose overrides command to Jupyter)
 CMD ["bash"]

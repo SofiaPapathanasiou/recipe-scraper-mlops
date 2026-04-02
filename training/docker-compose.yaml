@@ -119,6 +119,7 @@ services:
       MLFLOW_EXTRA_ALLOWED_HOSTS: ${MLFLOW_EXTRA_ALLOWED_HOSTS:-}
       # Optional full override (e.g. * for dev). If set, startup skips merging and uses this value as-is.
       MLFLOW_SERVER_ALLOWED_HOSTS: ${MLFLOW_SERVER_ALLOWED_HOSTS:-}
+      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: ${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-}
       MLFLOW_HTTP_GATEWAY_ALLOW_HOSTS: "*"
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_S3_FORCE_PATH_STYLE: "true"
@@ -237,16 +238,11 @@ services:
     restart: "no"
     depends_on: *runtime-depends-on
     environment:
-      MODEL_NAME: ${MODEL_NAME:-t5-small}
-      MAX_INPUT_LENGTH: ${MAX_INPUT_LENGTH:-512}
-      MAX_TARGET_LENGTH: ${MAX_TARGET_LENGTH:-512}
-      TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE:-8}
-      EVAL_BATCH_SIZE: ${EVAL_BATCH_SIZE:-8}
-      NUM_EPOCHS: ${NUM_EPOCHS:-3}
-      LEARNING_RATE: ${LEARNING_RATE:-0.0003}
-      EXPERIMENT_NAME: ${EXPERIMENT_NAME:-recipe-correction-t5}
+      NUM_PROCESSES: ${NUM_PROCESSES:-2}
       <<: *runtime-env
     volumes:
       - .:/app
+      - ./data:/app/data
+      - ./checkpoints:/app/checkpoints
     gpus: all
     <<: *mlops-network
