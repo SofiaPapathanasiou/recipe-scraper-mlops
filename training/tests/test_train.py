@@ -206,3 +206,20 @@ def test_build_dataloaders_smoke_for_mock_source():
     assert len(val_dataset) == cfg["data"]["mock_val_size"]
     batch = next(iter(train_loader))
     assert set(batch.keys()) == {"input_ids", "attention_mask", "labels"}
+
+
+def test_resolve_run_checkpoint_dir_uses_mlflow_run_id(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+
+    resolved = train.resolve_run_checkpoint_dir(checkpoint_dir, "abc123")
+
+    assert resolved == checkpoint_dir / "abc123"
+
+
+def test_resolve_run_checkpoint_dir_falls_back_to_manual_run_name(tmp_path, monkeypatch):
+    checkpoint_dir = tmp_path / "checkpoints"
+    monkeypatch.setattr(train.time, "time", lambda: 1234.56)
+
+    resolved = train.resolve_run_checkpoint_dir(checkpoint_dir, None)
+
+    assert resolved == checkpoint_dir / "manual-run-1234"

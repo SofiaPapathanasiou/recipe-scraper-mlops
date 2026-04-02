@@ -68,14 +68,19 @@ COPY --chown=trainer:trainer . .
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TOKENIZERS_PARALLELISM=false \
-    HF_HOME=/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface/hub \
+    XDG_CACHE_HOME=/tmp/.cache \
+    HF_HOME=/tmp/huggingface \
+    HUGGINGFACE_HUB_CACHE=/tmp/huggingface/hub \
+    HF_DATASETS_CACHE=/tmp/huggingface/datasets \
+    TRANSFORMERS_CACHE=/tmp/huggingface/hub \
+    MPLCONFIGDIR=/tmp/matplotlib \
     MLFLOW_TRACKING_URI=http://mlflow:5000 \
     MLFLOW_S3_ENDPOINT_URL=http://minio:9000
 
 # Create expected dirs when volumes are not mounted yet
-RUN mkdir -p /opt/venv /app/.cache/huggingface /app/checkpoints /app/data/raw /app/data/processed \
-    && chown -R trainer:trainer /app
+RUN mkdir -p /opt/venv /tmp/.cache /tmp/huggingface/hub /tmp/huggingface/datasets /tmp/matplotlib \
+    /app/checkpoints /app/data/raw /app/data/processed \
+    && chown -R trainer:trainer /app /tmp/.cache /tmp/huggingface /tmp/matplotlib
 USER trainer
 
 # Health check verifies the Python environment and key imports

@@ -475,6 +475,12 @@ def log_model_summary(model: torch.nn.Module) -> None:
     os.unlink(summary_path)
 
 
+def resolve_run_checkpoint_dir(checkpoint_dir: Path, run_id: str | None) -> Path:
+    if run_id:
+        return checkpoint_dir / run_id
+    return checkpoint_dir / f"manual-run-{int(time.time())}"
+
+
 def save_checkpoint(
     accelerator: Accelerator,
     model: torch.nn.Module,
@@ -620,8 +626,13 @@ def train_worker(config_dict: dict[str, Any]) -> None:
         sum(parameter.numel() for parameter in accelerator.unwrap_model(model).parameters() if parameter.requires_grad),
         model,
     )
+    run_checkpoint_dir = resolve_run_checkpoint_dir(checkpoint_dir, run_id)
     training_start = time.time()
-    debug_log(accelerator, f"MLflow run id: {run_id or 'not-started-on-this-rank'}")
+    debug_log(
+        accelerator,
+        f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
+        f"local checkpoints will be stored under {run_checkpoint_dir}",
+    )
 
     try:
         optimizer.zero_grad()
@@ -696,7 +707,14 @@ def train_worker(config_dict: dict[str, Any]) -> None:
                 "samples_per_sec": round(len(train_dataset) / max(epoch_time, 1e-6), 2),
                 **get_peak_gpu_metrics(accelerator),
             }
-            checkpoint_path = save_checkpoint(accelerator, model, tokenizer, checkpoint_dir, epoch, epoch_metrics)
+            checkpoint_path = save_checkpoint(
+                accelerator,
+                model,
+                tokenizer,
+                run_checkpoint_dir,
+                epoch,
+                epoch_metrics,
+            )
             debug_log(
                 accelerator,
                 f"Epoch {epoch} complete. Checkpoint saved to {checkpoint_path}. "
@@ -754,6 +772,7 @@ def train_worker(config_dict: dict[str, Any]) -> None:
     finally:
         if accelerator.is_main_process and mlflow.active_run() is not None:
             mlflow.end_run()
+        accelerator.end_training()
 
 
 # =============================================================================
