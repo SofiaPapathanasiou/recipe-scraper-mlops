@@ -3,7 +3,9 @@ name = "recipe-correction-training"
 version = "0.1.0"
 requires-python = ">=3.10"
 
-# Core deps — needed by both training and dev containers
+# Core deps — needed by both training and dev containers.
+# PyTorch is installed from this CPU index by default, then the Jupyter
+# container can replace it at startup with a GPU wheel when GPUs are exposed.
 dependencies = [
     "torch>=2.2.0",
     "transformers>=4.40.0",
