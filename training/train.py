@@ -4,16 +4,20 @@ import json
 import math
 import os
 import platform
+import re
 import socket
+import subprocess
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import boto3
 import mlflow
 import mlflow.pytorch
+import optuna
 import psutil
 import torch
 import yaml
@@ -67,6 +71,30 @@ CORRUPTIONS = [
 ]
 
 
+@dataclass
+class TrainingContext:
+    mode: str = "train"
+    mlflow_experiment_name: str | None = None
+    mlflow_run_name: str | None = None
+    mlflow_nested: bool = False
+    mlflow_tags: dict[str, Any] = field(default_factory=dict)
+    register_model: bool | None = None
+    trial: optuna.trial.Trial | None = None
+    objective_direction: str | None = None
+    objective_metric_name: str | None = None
+    trial_params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TrainingResult:
+    best_metric: float
+    best_metric_name: str
+    best_checkpoint: str | None
+    run_id: str | None
+    final_metrics: dict[str, float]
+    resolved_config: dict[str, Any]
+
+
 def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     flattened: dict[str, Any] = {}
     for key, value in data.items():
@@ -78,11 +106,102 @@ def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return flattened
 
 
+def sanitize_mlflow_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if value is None:
+        return "null"
+    return json.dumps(value, sort_keys=True)
+
+
+def sanitize_mlflow_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {key: sanitize_mlflow_value(value) for key, value in params.items()}
+
+
 def debug_log(accelerator: Accelerator, message: str, *, main_process_only: bool = True) -> None:
     if main_process_only and not accelerator.is_main_process:
         return
     prefix = f"[rank {accelerator.process_index}]"
     accelerator.print(f"{prefix} {message}")
+
+
+def log_temp_artifact(content: str, filename: str, artifact_path: str | None = None) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        artifact_file = Path(temp_dir) / filename
+        artifact_file.write_text(content, encoding="utf-8")
+        if artifact_path is None:
+            mlflow.log_artifact(str(artifact_file))
+        else:
+            mlflow.log_artifact(str(artifact_file), artifact_path=artifact_path)
+
+
+def log_yaml_artifact(data: dict[str, Any], filename: str, artifact_path: str | None = None) -> None:
+    log_temp_artifact(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=False),
+        filename=filename,
+        artifact_path=artifact_path,
+    )
+
+
+def log_json_artifact(data: Any, filename: str, artifact_path: str | None = None) -> None:
+    log_temp_artifact(
+        json.dumps(data, indent=2, sort_keys=True),
+        filename=filename,
+        artifact_path=artifact_path,
+    )
+
+
+def write_yaml_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=False)
+
+
+def sanitize_study_name(study_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", study_name.strip())
+    return cleaned.strip("-") or "optuna-study"
+
+
+def get_nested_value(data: dict[str, Any], dotted_path: str) -> Any:
+    current: Any = data
+    for part in dotted_path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(f"Unknown config path: {dotted_path}")
+        current = current[part]
+    return current
+
+
+def set_nested_value(data: dict[str, Any], dotted_path: str, value: Any) -> None:
+    parts = dotted_path.split(".")
+    current: dict[str, Any] = data
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            raise KeyError(f"Unknown config path: {dotted_path}")
+        current = next_value
+    if parts[-1] not in current:
+        raise KeyError(f"Unknown config path: {dotted_path}")
+    current[parts[-1]] = value
+
+
+def infer_metric_direction(metric_name: str) -> str:
+    return "minimize" if "loss" in metric_name.lower() else "maximize"
+
+
+def is_better_metric(candidate: float, best: float, direction: str) -> bool:
+    if direction == "minimize":
+        return candidate < best
+    return candidate > best
+
+
+def initial_best_metric(direction: str) -> float:
+    return float("inf") if direction == "minimize" else -float("inf")
+
+
+def best_metric_to_log(best_metric: float, direction: str) -> float:
+    if direction == "minimize":
+        return best_metric if best_metric < float("inf") else 0.0
+    return best_metric if best_metric > -float("inf") else 0.0
 
 
 def load_config(yaml_path: str) -> dict[str, Any]:
@@ -93,7 +212,131 @@ def load_config(yaml_path: str) -> dict[str, Any]:
     if data_source not in {"mock", "minio"}:
         raise ValueError(f"Unsupported data.source {data_source!r}; expected 'mock' or 'minio'.")
 
+    config["mlflow"].setdefault(
+        "tuning_experiment_name",
+        f"{config['mlflow']['experiment_name']}-optuna",
+    )
     return config
+
+
+def validate_optuna_config(cfg: dict[str, Any]) -> None:
+    optuna_cfg = cfg.get("optuna")
+    if not isinstance(optuna_cfg, dict):
+        raise ValueError("Tune mode requires an optuna section in config.yaml.")
+
+    if optuna_cfg.get("direction") not in {"maximize", "minimize"}:
+        raise ValueError("optuna.direction must be either 'maximize' or 'minimize'.")
+
+    if int(optuna_cfg.get("n_trials", 0)) <= 0:
+        raise ValueError("optuna.n_trials must be a positive integer.")
+
+    search_space = optuna_cfg.get("search_space")
+    if not isinstance(search_space, dict) or not search_space:
+        raise ValueError("optuna.search_space must be a non-empty mapping.")
+
+    for dotted_path, spec in search_space.items():
+        get_nested_value(cfg, dotted_path)
+        if not isinstance(spec, dict):
+            raise ValueError(f"Search space for {dotted_path} must be a mapping.")
+        spec_type = spec.get("type")
+        if spec_type not in {"float", "int", "categorical"}:
+            raise ValueError(f"Unsupported search-space type for {dotted_path}: {spec_type!r}")
+        if spec_type in {"float", "int"}:
+            if "low" not in spec or "high" not in spec:
+                raise ValueError(f"Search space for {dotted_path} must define low and high.")
+            if spec.get("log") and "step" in spec:
+                raise ValueError(f"Search space for {dotted_path} cannot use both log and step.")
+        if spec_type == "categorical":
+            choices = spec.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError(f"Categorical search space for {dotted_path} must define choices.")
+
+
+def build_optuna_sampler(sampler_cfg: dict[str, Any]) -> optuna.samplers.BaseSampler:
+    sampler_type = sampler_cfg.get("type", "tpe")
+    seed = sampler_cfg.get("seed")
+    if sampler_type == "tpe":
+        return optuna.samplers.TPESampler(seed=seed)
+    if sampler_type == "random":
+        return optuna.samplers.RandomSampler(seed=seed)
+    raise ValueError(f"Unsupported Optuna sampler type: {sampler_type!r}")
+
+
+def build_optuna_pruner(pruner_cfg: dict[str, Any]) -> optuna.pruners.BasePruner:
+    pruner_type = pruner_cfg.get("type", "median")
+    if pruner_type in {"none", "nop"}:
+        return optuna.pruners.NopPruner()
+    if pruner_type == "median":
+        return optuna.pruners.MedianPruner(
+            n_startup_trials=int(pruner_cfg.get("n_startup_trials", 0)),
+            n_warmup_steps=int(pruner_cfg.get("n_warmup_steps", 0)),
+        )
+    raise ValueError(f"Unsupported Optuna pruner type: {pruner_type!r}")
+
+
+def sample_trial_params(
+    trial: optuna.trial.Trial,
+    search_space: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    sampled: dict[str, Any] = {}
+    for dotted_path, spec in search_space.items():
+        spec_type = spec["type"]
+        if spec_type == "float":
+            sampled[dotted_path] = trial.suggest_float(
+                dotted_path,
+                float(spec["low"]),
+                float(spec["high"]),
+                log=bool(spec.get("log", False)),
+                step=spec.get("step"),
+            )
+        elif spec_type == "int":
+            sampled[dotted_path] = trial.suggest_int(
+                dotted_path,
+                int(spec["low"]),
+                int(spec["high"]),
+                log=bool(spec.get("log", False)),
+                step=int(spec.get("step", 1)),
+            )
+        else:
+            sampled[dotted_path] = trial.suggest_categorical(dotted_path, spec["choices"])
+    return sampled
+
+
+def apply_trial_params(base_cfg: dict[str, Any], trial_params: dict[str, Any]) -> dict[str, Any]:
+    resolved_cfg = copy.deepcopy(base_cfg)
+    for dotted_path, value in trial_params.items():
+        set_nested_value(resolved_cfg, dotted_path, value)
+    return resolved_cfg
+
+
+def resolve_study_output_dir(cfg: dict[str, Any]) -> Path:
+    checkpoint_root = Path(cfg["checkpointing"]["checkpoint_dir"])
+    return checkpoint_root / "optuna" / sanitize_study_name(cfg["optuna"]["study_name"])
+
+
+def build_trial_summary(study: optuna.study.Study) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for trial in study.trials:
+        summary.append(
+            {
+                "number": trial.number,
+                "state": trial.state.name,
+                "value": trial.value,
+                "params": trial.params,
+                "user_attrs": trial.user_attrs,
+            }
+        )
+    return summary
+
+
+def ensure_supported_tune_runtime() -> None:
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    if world_size > 1:
+        raise RuntimeError(
+            "Tune mode must be started without multi-process Accelerate launch. "
+            "Run tune mode as a single controller process, for example with "
+            "TRAIN_MODE=tune in the Docker training container."
+        )
 
 
 # =============================================================================
@@ -423,6 +666,19 @@ def get_peak_gpu_metrics(accelerator: Accelerator) -> dict[str, float]:
 
 
 def log_environment_info() -> dict[str, str]:
+    def git_commit_hash() -> str:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            commit = result.stdout.strip()
+            return commit or "unknown"
+        except Exception:
+            return "unknown"
+
     info: dict[str, str] = {
         "env.python_version": platform.python_version(),
         "env.platform": platform.platform(),
@@ -435,6 +691,7 @@ def log_environment_info() -> dict[str, str]:
         "env.transformers_version": transformers.__version__,
         "env.accelerate_version": accelerate_pkg.__version__,
         "env.mlflow_version": mlflow.__version__,
+        "env.git_commit_hash": git_commit_hash(),
     }
 
     gpu_names: list[str] = []
@@ -471,8 +728,10 @@ def log_model_summary(model: torch.nn.Module) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as handle:
         handle.write(str(model))
         summary_path = handle.name
-    mlflow.log_artifact(summary_path, artifact_path="model_summary")
-    os.unlink(summary_path)
+    try:
+        mlflow.log_artifact(summary_path, artifact_path="model_summary")
+    finally:
+        os.unlink(summary_path)
 
 
 def resolve_run_checkpoint_dir(checkpoint_dir: Path, run_id: str | None) -> Path:
@@ -514,20 +773,17 @@ def maybe_start_mlflow_run(
     warmup_steps: int,
     trainable_params: int,
     model: torch.nn.Module,
+    context: TrainingContext,
 ) -> str | None:
     if not accelerator.is_main_process:
         return None
 
-    # Only the main process writes run metadata to avoid duplicate MLflow entries.
-    mlflow.end_run()
+    experiment_name = context.mlflow_experiment_name or cfg["mlflow"]["experiment_name"]
     mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
-    mlflow.set_experiment(cfg["mlflow"]["experiment_name"])
-    run = mlflow.start_run(
-        run_name=(
-            f"{cfg['model']['name']}__lr{cfg['training']['learning_rate']}"
-            f"__ep{cfg['training']['num_epochs']}"
-        )
-    )
+    mlflow.set_experiment(experiment_name)
+    run = mlflow.start_run(run_name=context.mlflow_run_name, nested=context.mlflow_nested)
+    if context.mlflow_run_name is None:
+        mlflow.set_tag("mlflow.runName", f"{time.strftime('%Y-%m-%d')}-{run.info.run_id}")
 
     flat_params = flatten_dict(cfg)
     flat_params.update(
@@ -545,14 +801,28 @@ def maybe_start_mlflow_run(
             "num_val_examples": len(val_dataset),
         }
     )
-    mlflow.log_params(flat_params)
+    mlflow.log_params(sanitize_mlflow_params(flat_params))
+    if context.trial_params:
+        mlflow.log_params(
+            sanitize_mlflow_params(
+                {f"trial_param.{key}": value for key, value in context.trial_params.items()}
+            )
+        )
     mlflow.set_tags(log_environment_info())
+    if context.mlflow_tags:
+        mlflow.set_tags({key: str(value) for key, value in context.mlflow_tags.items()})
     log_model_summary(accelerator.unwrap_model(model))
+    log_yaml_artifact(cfg, "resolved_config.yaml", artifact_path="config")
     return run.info.run_id
 
 
-def maybe_register_best_model(cfg: dict[str, Any], best_checkpoint: str | None) -> None:
-    if not best_checkpoint or not cfg["mlflow"]["register_model"]:
+def maybe_register_best_model(
+    cfg: dict[str, Any],
+    best_checkpoint: str | None,
+    register_model_override: bool | None = None,
+) -> None:
+    should_register = cfg["mlflow"]["register_model"] if register_model_override is None else register_model_override
+    if not best_checkpoint or not should_register:
         return
 
     best_model = AutoModelForSeq2SeqLM.from_pretrained(best_checkpoint)
@@ -567,7 +837,8 @@ def maybe_register_best_model(cfg: dict[str, Any], best_checkpoint: str | None) 
 # Main training loop
 # =============================================================================
 
-def train_worker(config_dict: dict[str, Any]) -> None:
+def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = None) -> TrainingResult:
+    context = context or TrainingContext()
     mixed_precision = os.getenv("ACCELERATE_MIXED_PRECISION", "no")
     accelerator = Accelerator(
         mixed_precision=mixed_precision,
@@ -611,8 +882,11 @@ def train_worker(config_dict: dict[str, Any]) -> None:
     debug_log(accelerator, f"Accelerator prepared objects on device {accelerator.device}.", main_process_only=False)
 
     checkpoint_dir = Path(config_dict["checkpointing"]["checkpoint_dir"])
-    best_metric = -float("inf")
+    objective_metric_name = context.objective_metric_name or config_dict["evaluation"]["metric_for_best_model"]
+    objective_direction = context.objective_direction or infer_metric_direction(objective_metric_name)
+    best_metric = initial_best_metric(objective_direction)
     best_checkpoint: str | None = None
+    final_metrics: dict[str, float] = {}
     global_step = 0
     train_loss_accumulator = 0.0
     train_loss_window_count = 0
@@ -625,6 +899,7 @@ def train_worker(config_dict: dict[str, Any]) -> None:
         warmup_steps,
         sum(parameter.numel() for parameter in accelerator.unwrap_model(model).parameters() if parameter.requires_grad),
         model,
+        context,
     )
     run_checkpoint_dir = resolve_run_checkpoint_dir(checkpoint_dir, run_id)
     training_start = time.time()
@@ -707,6 +982,28 @@ def train_worker(config_dict: dict[str, Any]) -> None:
                 "samples_per_sec": round(len(train_dataset) / max(epoch_time, 1e-6), 2),
                 **get_peak_gpu_metrics(accelerator),
             }
+            current_metric = epoch_metrics[objective_metric_name]
+
+            prune_requested = False
+            if accelerator.is_main_process and context.trial is not None:
+                context.trial.report(current_metric, step=epoch)
+                mlflow.log_metric("objective_value", current_metric, step=global_step)
+                if context.trial.should_prune():
+                    prune_requested = True
+                    mlflow.set_tags(
+                        {
+                            "status": "pruned",
+                            "objective_metric_name": objective_metric_name,
+                            "objective_direction": objective_direction,
+                        }
+                    )
+                    mlflow.log_metric("pruned_epoch", epoch, step=global_step)
+
+            prune_signal = torch.tensor(int(prune_requested), device=accelerator.device)
+            should_prune = accelerator.reduce(prune_signal, reduction="sum").item() > 0
+            if should_prune:
+                raise optuna.TrialPruned(f"Trial pruned at epoch {epoch} with {objective_metric_name}={current_metric:.4f}")
+
             checkpoint_path = save_checkpoint(
                 accelerator,
                 model,
@@ -723,38 +1020,61 @@ def train_worker(config_dict: dict[str, Any]) -> None:
 
             if accelerator.is_main_process:
                 mlflow.log_metrics(epoch_metrics, step=global_step)
+                mlflow.log_metric("objective_value", current_metric, step=global_step)
                 mlflow.log_artifacts(checkpoint_path, artifact_path=f"checkpoints/epoch-{epoch:02d}")
 
-                # Track the best checkpoint using the configured validation metric.
-                metric_name = config_dict["evaluation"]["metric_for_best_model"]
-                current_metric = epoch_metrics[metric_name]
-                if current_metric > best_metric:
+                if is_better_metric(current_metric, best_metric, objective_direction):
                     best_metric = current_metric
                     best_checkpoint = checkpoint_path
-                    mlflow.log_metric("best_rougeL", best_metric, step=global_step)
+                    mlflow.log_metric(
+                        f"best_{objective_metric_name}",
+                        best_metric,
+                        step=global_step,
+                    )
                     mlflow.set_tag("best_checkpoint", best_checkpoint)
                     debug_log(
                         accelerator,
                         f"New best checkpoint at epoch {epoch}: {best_checkpoint} "
-                        f"({metric_name}={current_metric:.4f})",
+                        f"({objective_metric_name}={current_metric:.4f})",
                     )
+
+            final_metrics = epoch_metrics
 
         if accelerator.is_main_process:
             total_training_time = round(time.time() - training_start, 2)
             mlflow.log_metric("total_training_time_sec", total_training_time, step=global_step)
-            mlflow.log_metric("best_rougeL", best_metric if best_metric > -float("inf") else 0.0, step=global_step)
-            maybe_register_best_model(config_dict, best_checkpoint)
+            mlflow.log_metric(
+                f"best_{objective_metric_name}",
+                best_metric_to_log(best_metric, objective_direction),
+                step=global_step,
+            )
+            maybe_register_best_model(config_dict, best_checkpoint, context.register_model)
             mlflow.set_tags(
                 {
+                    "mode": context.mode,
                     "model_name": config_dict["model"]["name"],
                     "task": "recipe-correction",
                     "data_source": config_dict["data"]["source"],
                     "status": "complete",
                     "best_checkpoint": best_checkpoint or "none",
+                    "objective_metric_name": objective_metric_name,
+                    "objective_direction": objective_direction,
                 }
             )
             accelerator.print(f"Training complete. Run ID: {run_id}")
             accelerator.print(f"Best checkpoint: {best_checkpoint}")
+
+        return TrainingResult(
+            best_metric=best_metric_to_log(best_metric, objective_direction),
+            best_metric_name=objective_metric_name,
+            best_checkpoint=best_checkpoint,
+            run_id=run_id,
+            final_metrics=final_metrics,
+            resolved_config=copy.deepcopy(config_dict),
+        )
+    except optuna.TrialPruned:
+        debug_log(accelerator, "Training trial was pruned.", main_process_only=False)
+        raise
     except Exception as error:
         debug_log(
             accelerator,
@@ -775,6 +1095,112 @@ def train_worker(config_dict: dict[str, Any]) -> None:
         accelerator.end_training()
 
 
+def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
+    validate_optuna_config(cfg)
+    optuna_cfg = cfg["optuna"]
+    study_output_dir = resolve_study_output_dir(cfg)
+    study_output_dir.mkdir(parents=True, exist_ok=True)
+
+    mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
+    mlflow.set_experiment(cfg["mlflow"]["tuning_experiment_name"])
+    parent_run = mlflow.start_run(run_name=optuna_cfg["study_name"])
+    mlflow.set_tags({"mode": "tune", "study_name": optuna_cfg["study_name"], "status": "running"})
+    mlflow.log_params(
+        sanitize_mlflow_params(
+            {
+                "optuna.study_name": optuna_cfg["study_name"],
+                "optuna.direction": optuna_cfg["direction"],
+                "optuna.n_trials": optuna_cfg["n_trials"],
+                "optuna.timeout_sec": optuna_cfg.get("timeout_sec"),
+            }
+        )
+    )
+    log_yaml_artifact(cfg, "study_config.yaml", artifact_path="study")
+
+    study = optuna.create_study(
+        study_name=optuna_cfg["study_name"],
+        direction=optuna_cfg["direction"],
+        storage=optuna_cfg.get("storage"),
+        load_if_exists=bool(optuna_cfg.get("storage")),
+        sampler=build_optuna_sampler(optuna_cfg.get("sampler", {})),
+        pruner=build_optuna_pruner(optuna_cfg.get("pruner", {})),
+    )
+
+    def objective(trial: optuna.trial.Trial) -> float:
+        trial_params = sample_trial_params(trial, optuna_cfg["search_space"])
+        resolved_cfg = apply_trial_params(cfg, trial_params)
+        context = TrainingContext(
+            mode="tune",
+            mlflow_experiment_name=cfg["mlflow"]["tuning_experiment_name"],
+            mlflow_run_name=f"trial-{trial.number:04d}",
+            mlflow_nested=True,
+            mlflow_tags={
+                "mode": "tune",
+                "study_name": optuna_cfg["study_name"],
+                "trial_number": trial.number,
+                "parent_run_id": parent_run.info.run_id,
+            },
+            register_model=False,
+            trial=trial,
+            objective_direction=optuna_cfg["direction"],
+            objective_metric_name=cfg["evaluation"]["metric_for_best_model"],
+            trial_params=trial_params,
+        )
+        result = train_worker(resolved_cfg, context=context)
+        trial.set_user_attr("run_id", result.run_id)
+        trial.set_user_attr("best_checkpoint", result.best_checkpoint)
+        trial.set_user_attr("best_metric_name", result.best_metric_name)
+        trial.set_user_attr("final_metrics", result.final_metrics)
+        trial.set_user_attr("resolved_config", result.resolved_config)
+        return result.best_metric
+
+    try:
+        study.optimize(
+            objective,
+            n_trials=int(optuna_cfg["n_trials"]),
+            timeout=optuna_cfg.get("timeout_sec"),
+        )
+
+        completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+        if not completed_trials:
+            raise RuntimeError("Optuna study finished without any completed trials.")
+
+        best_trial = study.best_trial
+        best_config = best_trial.user_attrs["resolved_config"]
+        best_config_path = study_output_dir / "best_config.yaml"
+        write_yaml_file(best_config_path, best_config)
+
+        summary = build_trial_summary(study)
+        summary_path = study_output_dir / "trial_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2)
+
+        mlflow.log_metric("best_value", float(study.best_value))
+        mlflow.log_metric("best_trial_number", float(best_trial.number))
+        mlflow.log_params(
+            sanitize_mlflow_params(
+                {f"best_param.{key}": value for key, value in best_trial.params.items()}
+            )
+        )
+        mlflow.log_artifact(str(best_config_path), artifact_path="study")
+        log_json_artifact(summary, "trial_summary.json", artifact_path="study")
+        mlflow.set_tags(
+            {
+                "status": "complete",
+                "best_trial_number": str(best_trial.number),
+                "best_run_id": str(best_trial.user_attrs.get("run_id", "unknown")),
+            }
+        )
+        return study
+    except Exception:
+        if mlflow.active_run() is not None:
+            mlflow.set_tag("status", "failed")
+        raise
+    finally:
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+
+
 # =============================================================================
 # CLI entrypoint
 # =============================================================================
@@ -786,9 +1212,20 @@ def main() -> None:
         default=str(Path(__file__).with_name("config.yaml")),
         help="Path to the training config YAML file.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("train", "tune"),
+        default="train",
+        help="Whether to run one training job or an Optuna tuning study.",
+    )
     args = parser.parse_args()
     cfg = load_config(args.config)
-    train_worker(cfg)
+
+    if args.mode == "tune":
+        ensure_supported_tune_runtime()
+        run_optuna_study(cfg)
+    else:
+        train_worker(cfg)
 
 
 if __name__ == "__main__":
