@@ -7,6 +7,7 @@ import platform
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -77,12 +78,16 @@ class TrainingContext:
     mlflow_experiment_name: str | None = None
     mlflow_run_name: str | None = None
     mlflow_nested: bool = False
+    mlflow_parent_run_id: str | None = None
     mlflow_tags: dict[str, Any] = field(default_factory=dict)
     register_model: bool | None = None
     trial: optuna.trial.Trial | None = None
     objective_direction: str | None = None
     objective_metric_name: str | None = None
     trial_params: dict[str, Any] = field(default_factory=dict)
+    progress_file: str | None = None
+    prune_signal_file: str | None = None
+    result_file: str | None = None
 
 
 @dataclass
@@ -93,6 +98,64 @@ class TrainingResult:
     run_id: str | None
     final_metrics: dict[str, float]
     resolved_config: dict[str, Any]
+
+
+def serialize_training_context(context: TrainingContext) -> dict[str, Any]:
+    return {
+        "mode": context.mode,
+        "mlflow_experiment_name": context.mlflow_experiment_name,
+        "mlflow_run_name": context.mlflow_run_name,
+        "mlflow_nested": context.mlflow_nested,
+        "mlflow_parent_run_id": context.mlflow_parent_run_id,
+        "mlflow_tags": context.mlflow_tags,
+        "register_model": context.register_model,
+        "objective_direction": context.objective_direction,
+        "objective_metric_name": context.objective_metric_name,
+        "trial_params": context.trial_params,
+        "progress_file": context.progress_file,
+        "prune_signal_file": context.prune_signal_file,
+        "result_file": context.result_file,
+    }
+
+
+def deserialize_training_context(payload: dict[str, Any]) -> TrainingContext:
+    return TrainingContext(
+        mode=payload.get("mode", "train"),
+        mlflow_experiment_name=payload.get("mlflow_experiment_name"),
+        mlflow_run_name=payload.get("mlflow_run_name"),
+        mlflow_nested=bool(payload.get("mlflow_nested", False)),
+        mlflow_parent_run_id=payload.get("mlflow_parent_run_id"),
+        mlflow_tags=dict(payload.get("mlflow_tags", {})),
+        register_model=payload.get("register_model"),
+        objective_direction=payload.get("objective_direction"),
+        objective_metric_name=payload.get("objective_metric_name"),
+        trial_params=dict(payload.get("trial_params", {})),
+        progress_file=payload.get("progress_file"),
+        prune_signal_file=payload.get("prune_signal_file"),
+        result_file=payload.get("result_file"),
+    )
+
+
+def serialize_training_result(result: TrainingResult) -> dict[str, Any]:
+    return {
+        "best_metric": result.best_metric,
+        "best_metric_name": result.best_metric_name,
+        "best_checkpoint": result.best_checkpoint,
+        "run_id": result.run_id,
+        "final_metrics": result.final_metrics,
+        "resolved_config": result.resolved_config,
+    }
+
+
+def deserialize_training_result(payload: dict[str, Any]) -> TrainingResult:
+    return TrainingResult(
+        best_metric=float(payload["best_metric"]),
+        best_metric_name=str(payload["best_metric_name"]),
+        best_checkpoint=payload.get("best_checkpoint"),
+        run_id=payload.get("run_id"),
+        final_metrics=dict(payload["final_metrics"]),
+        resolved_config=dict(payload["resolved_config"]),
+    )
 
 
 def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -162,6 +225,16 @@ def sanitize_study_name(study_name: str) -> str:
     return cleaned.strip("-") or "optuna-study"
 
 
+def get_mlflow_experiment_name(cfg: dict[str, Any], mode: str) -> str:
+    if mode == "tune":
+        return cfg["mlflow"].get("active_experiment_name") or cfg["mlflow"]["tuning_experiment_name"]
+    return cfg["mlflow"].get("active_experiment_name") or cfg["mlflow"]["experiment_name"]
+
+
+def format_mlflow_run_name(run_id: str) -> str:
+    return f"{time.strftime('%Y-%m-%d')}-{run_id}"
+
+
 def get_nested_value(data: dict[str, Any], dotted_path: str) -> Any:
     current: Any = data
     for part in dotted_path.split("."):
@@ -217,6 +290,61 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         f"{config['mlflow']['experiment_name']}-optuna",
     )
     return config
+
+
+def load_training_context(context_path: str | None) -> TrainingContext | None:
+    if context_path is None:
+        return None
+    with open(context_path, "r", encoding="utf-8") as handle:
+        return deserialize_training_context(json.load(handle))
+
+
+def write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def append_jsonl_file(path: str | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def prune_requested_via_file(context: TrainingContext) -> bool:
+    if context.prune_signal_file is None:
+        return False
+    return Path(context.prune_signal_file).exists()
+
+
+def write_training_result_payload(context: TrainingContext, payload: dict[str, Any]) -> None:
+    if context.result_file is None:
+        return
+    write_json_file(Path(context.result_file), payload)
+
+
+def mark_mlflow_run_pruned(
+    epoch: int,
+    global_step: int,
+    objective_metric_name: str,
+    objective_direction: str,
+    current_metric: float | None = None,
+) -> None:
+    if mlflow.active_run() is None:
+        return
+    mlflow.set_tags(
+        {
+            "status": "pruned",
+            "objective_metric_name": objective_metric_name,
+            "objective_direction": objective_direction,
+        }
+    )
+    if current_metric is not None:
+        mlflow.log_metric("objective_value", current_metric, step=global_step)
+    mlflow.log_metric("pruned_epoch", epoch, step=global_step)
 
 
 def validate_optuna_config(cfg: dict[str, Any]) -> None:
@@ -333,9 +461,138 @@ def ensure_supported_tune_runtime() -> None:
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     if world_size > 1:
         raise RuntimeError(
-            "Tune mode must be started without multi-process Accelerate launch. "
-            "Run tune mode as a single controller process, for example with "
-            "TRAIN_MODE=tune in the Docker training container."
+            "Tune mode must be started as a single controller process. "
+            "The controller launches each trial with Accelerate on the requested GPUs. "
+            "Run tune mode directly, for example with TRAIN_MODE=tune in the Docker training container."
+        )
+
+
+def resolve_tune_num_processes() -> int:
+    available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    requested = os.getenv("NUM_PROCESSES")
+    if requested is None or requested.strip() == "":
+        return available_gpu_count if available_gpu_count > 0 else 1
+
+    try:
+        parsed = int(requested)
+    except ValueError as error:
+        raise ValueError(f"NUM_PROCESSES must be an integer, got {requested!r}.") from error
+
+    if parsed < 1:
+        raise ValueError(f"NUM_PROCESSES must be at least 1, got {parsed}.")
+    if available_gpu_count == 0:
+        return 1
+    return min(parsed, available_gpu_count)
+
+
+def resolve_accelerate_config_path() -> str:
+    configured_path = os.getenv("ACCELERATE_CONFIG_FILE")
+    if configured_path:
+        return configured_path
+    return str(Path(__file__).with_name("accelerate_config.yaml"))
+
+
+def load_progress_updates(progress_path: Path, seen_epochs: set[int]) -> list[dict[str, Any]]:
+    if not progress_path.exists():
+        return []
+
+    updates: list[dict[str, Any]] = []
+    with open(progress_path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            epoch = int(payload["epoch"])
+            if epoch in seen_epochs:
+                continue
+            seen_epochs.add(epoch)
+            updates.append(payload)
+    return updates
+
+
+def run_distributed_trial(
+    cfg: dict[str, Any],
+    context: TrainingContext,
+    trial: optuna.trial.Trial,
+) -> TrainingResult:
+    num_processes = resolve_tune_num_processes()
+    accelerate_config_path = resolve_accelerate_config_path()
+    script_path = Path(__file__).resolve()
+
+    with tempfile.TemporaryDirectory(prefix=f"optuna-trial-{trial.number:04d}-") as temp_dir:
+        temp_root = Path(temp_dir)
+        config_path = temp_root / "resolved_config.yaml"
+        context_path = temp_root / "training_context.json"
+        progress_path = temp_root / "progress.jsonl"
+        prune_signal_path = temp_root / "prune.signal"
+        result_path = temp_root / "result.json"
+
+        child_context = copy.deepcopy(context)
+        child_context.progress_file = str(progress_path)
+        child_context.prune_signal_file = str(prune_signal_path)
+        child_context.result_file = str(result_path)
+        child_context.trial = None
+
+        write_yaml_file(config_path, cfg)
+        write_json_file(context_path, serialize_training_context(child_context))
+
+        command = [
+            sys.executable,
+            "-m",
+            "accelerate.commands.launch",
+            "--num_processes",
+            str(num_processes),
+            "--config_file",
+            accelerate_config_path,
+            str(script_path),
+            "--config",
+            str(config_path),
+            "--mode",
+            "train",
+            "--context-file",
+            str(context_path),
+        ]
+        print(f"[tune] Launching trial {trial.number} across {num_processes} process(es).", flush=True)
+        process = subprocess.Popen(command)
+
+        seen_epochs: set[int] = set()
+        while process.poll() is None:
+            for update in load_progress_updates(progress_path, seen_epochs):
+                current_metric = float(update["current_metric"])
+                epoch = int(update["epoch"])
+                trial.report(current_metric, step=epoch)
+                if trial.should_prune() and not prune_signal_path.exists():
+                    prune_signal_path.write_text("1\n", encoding="utf-8")
+            time.sleep(1.0)
+
+        return_code = process.wait()
+        for update in load_progress_updates(progress_path, seen_epochs):
+            current_metric = float(update["current_metric"])
+            epoch = int(update["epoch"])
+            trial.report(current_metric, step=epoch)
+            if trial.should_prune() and not prune_signal_path.exists():
+                prune_signal_path.write_text("1\n", encoding="utf-8")
+
+        if not result_path.exists():
+            raise RuntimeError(
+                f"Distributed trial {trial.number} exited with code {return_code} before writing a result file."
+            )
+
+        with open(result_path, "r", encoding="utf-8") as handle:
+            result_payload = json.load(handle)
+
+        status = result_payload.get("status")
+        if status == "complete":
+            return deserialize_training_result(result_payload["result"])
+        if status == "pruned":
+            raise optuna.TrialPruned(result_payload.get("message", f"Trial {trial.number} was pruned."))
+
+        error_message = result_payload.get("error_message", "unknown error")
+        error_type = result_payload.get("error_type", "RuntimeError")
+        raise RuntimeError(
+            f"Distributed trial {trial.number} failed with {error_type}: {error_message} "
+            f"(process exit code {return_code})."
         )
 
 
@@ -778,12 +1035,15 @@ def maybe_start_mlflow_run(
     if not accelerator.is_main_process:
         return None
 
-    experiment_name = context.mlflow_experiment_name or cfg["mlflow"]["experiment_name"]
+    experiment_name = context.mlflow_experiment_name or get_mlflow_experiment_name(cfg, context.mode)
     mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
     mlflow.set_experiment(experiment_name)
-    run = mlflow.start_run(run_name=context.mlflow_run_name, nested=context.mlflow_nested)
-    if context.mlflow_run_name is None:
-        mlflow.set_tag("mlflow.runName", f"{time.strftime('%Y-%m-%d')}-{run.info.run_id}")
+    run = mlflow.start_run(
+        run_name=context.mlflow_run_name,
+        nested=context.mlflow_nested,
+        parent_run_id=context.mlflow_parent_run_id,
+    )
+    mlflow.set_tag("mlflow.runName", format_mlflow_run_name(run.info.run_id))
 
     flat_params = flatten_dict(cfg)
     flat_params.update(
@@ -912,6 +1172,22 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     try:
         optimizer.zero_grad()
         for epoch in range(1, config_dict["training"]["num_epochs"] + 1):
+            pre_epoch_prune_requested = False
+            if accelerator.is_main_process and prune_requested_via_file(context):
+                pre_epoch_prune_requested = True
+                mark_mlflow_run_pruned(
+                    epoch=epoch,
+                    global_step=global_step,
+                    objective_metric_name=objective_metric_name,
+                    objective_direction=objective_direction,
+                )
+            should_prune_before_epoch = accelerator.reduce(
+                torch.tensor(int(pre_epoch_prune_requested), device=accelerator.device),
+                reduction="sum",
+            ).item() > 0
+            if should_prune_before_epoch:
+                raise optuna.TrialPruned(f"Trial pruned before epoch {epoch} started.")
+
             model.train()
             epoch_start = time.time()
             debug_log(accelerator, f"Starting epoch {epoch}/{config_dict['training']['num_epochs']}.")
@@ -983,6 +1259,17 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 **get_peak_gpu_metrics(accelerator),
             }
             current_metric = epoch_metrics[objective_metric_name]
+            if accelerator.is_main_process:
+                append_jsonl_file(
+                    context.progress_file,
+                    {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "current_metric": current_metric,
+                        "objective_metric_name": objective_metric_name,
+                        "metrics": epoch_metrics,
+                    },
+                )
 
             prune_requested = False
             if accelerator.is_main_process and context.trial is not None:
@@ -990,14 +1277,22 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 mlflow.log_metric("objective_value", current_metric, step=global_step)
                 if context.trial.should_prune():
                     prune_requested = True
-                    mlflow.set_tags(
-                        {
-                            "status": "pruned",
-                            "objective_metric_name": objective_metric_name,
-                            "objective_direction": objective_direction,
-                        }
+                    mark_mlflow_run_pruned(
+                        epoch=epoch,
+                        global_step=global_step,
+                        objective_metric_name=objective_metric_name,
+                        objective_direction=objective_direction,
+                        current_metric=current_metric,
                     )
-                    mlflow.log_metric("pruned_epoch", epoch, step=global_step)
+            if accelerator.is_main_process and prune_requested_via_file(context):
+                prune_requested = True
+                mark_mlflow_run_pruned(
+                    epoch=epoch,
+                    global_step=global_step,
+                    objective_metric_name=objective_metric_name,
+                    objective_direction=objective_direction,
+                    current_metric=current_metric,
+                )
 
             prune_signal = torch.tensor(int(prune_requested), device=accelerator.device)
             should_prune = accelerator.reduce(prune_signal, reduction="sum").item() > 0
@@ -1064,7 +1359,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             accelerator.print(f"Training complete. Run ID: {run_id}")
             accelerator.print(f"Best checkpoint: {best_checkpoint}")
 
-        return TrainingResult(
+        training_result = TrainingResult(
             best_metric=best_metric_to_log(best_metric, objective_direction),
             best_metric_name=objective_metric_name,
             best_checkpoint=best_checkpoint,
@@ -1072,8 +1367,19 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             final_metrics=final_metrics,
             resolved_config=copy.deepcopy(config_dict),
         )
+        if accelerator.is_main_process:
+            write_training_result_payload(
+                context,
+                {"status": "complete", "result": serialize_training_result(training_result)},
+            )
+        return training_result
     except optuna.TrialPruned:
         debug_log(accelerator, "Training trial was pruned.", main_process_only=False)
+        if accelerator.is_main_process:
+            write_training_result_payload(
+                context,
+                {"status": "pruned", "message": "Training trial was pruned."},
+            )
         raise
     except Exception as error:
         debug_log(
@@ -1088,6 +1394,15 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         )
         if accelerator.is_main_process and mlflow.active_run() is not None:
             mlflow.set_tag("status", "failed")
+        if accelerator.is_main_process:
+            write_training_result_payload(
+                context,
+                {
+                    "status": "failed",
+                    "error_type": error.__class__.__name__,
+                    "error_message": str(error),
+                },
+            )
         raise
     finally:
         if accelerator.is_main_process and mlflow.active_run() is not None:
@@ -1101,10 +1416,19 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
     study_output_dir = resolve_study_output_dir(cfg)
     study_output_dir.mkdir(parents=True, exist_ok=True)
 
+    experiment_name = get_mlflow_experiment_name(cfg, "tune")
     mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
-    mlflow.set_experiment(cfg["mlflow"]["tuning_experiment_name"])
+    mlflow.set_experiment(experiment_name)
     parent_run = mlflow.start_run(run_name=optuna_cfg["study_name"])
-    mlflow.set_tags({"mode": "tune", "study_name": optuna_cfg["study_name"], "status": "running"})
+    mlflow.set_tag("mlflow.runName", format_mlflow_run_name(parent_run.info.run_id))
+    mlflow.set_tags(
+        {
+            "mode": "tune",
+            "study_name": optuna_cfg["study_name"],
+            "status": "running",
+            "mlflow_experiment_name": experiment_name,
+        }
+    )
     mlflow.log_params(
         sanitize_mlflow_params(
             {
@@ -1131,9 +1455,9 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
         resolved_cfg = apply_trial_params(cfg, trial_params)
         context = TrainingContext(
             mode="tune",
-            mlflow_experiment_name=cfg["mlflow"]["tuning_experiment_name"],
-            mlflow_run_name=f"trial-{trial.number:04d}",
+            mlflow_experiment_name=experiment_name,
             mlflow_nested=True,
+            mlflow_parent_run_id=parent_run.info.run_id,
             mlflow_tags={
                 "mode": "tune",
                 "study_name": optuna_cfg["study_name"],
@@ -1146,7 +1470,7 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
             objective_metric_name=cfg["evaluation"]["metric_for_best_model"],
             trial_params=trial_params,
         )
-        result = train_worker(resolved_cfg, context=context)
+        result = run_distributed_trial(resolved_cfg, context=context, trial=trial)
         trial.set_user_attr("run_id", result.run_id)
         trial.set_user_attr("best_checkpoint", result.best_checkpoint)
         trial.set_user_attr("best_metric_name", result.best_metric_name)
@@ -1218,14 +1542,36 @@ def main() -> None:
         default="train",
         help="Whether to run one training job or an Optuna tuning study.",
     )
+    parser.add_argument(
+        "--experiment-name",
+        default=None,
+        help="Override the MLflow experiment name for this invocation.",
+    )
+    parser.add_argument(
+        "--context-file",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.experiment_name:
+        cfg.setdefault("mlflow", {})
+        cfg["mlflow"]["active_experiment_name"] = args.experiment_name
+    context = load_training_context(args.context_file)
 
     if args.mode == "tune":
         ensure_supported_tune_runtime()
         run_optuna_study(cfg)
     else:
-        train_worker(cfg)
+        try:
+            train_worker(cfg, context=context)
+        except optuna.TrialPruned:
+            # Distributed tune workers report pruning through the result file for the
+            # controller process, so they should exit cleanly instead of surfacing as
+            # failed torchrun ranks.
+            if context is not None and context.result_file is not None:
+                return
+            raise
 
 
 if __name__ == "__main__":
