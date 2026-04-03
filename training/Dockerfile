@@ -6,7 +6,8 @@
 # - Multi-stage build keeps the final image smaller than the dev container
 #
 # Build:   docker compose build training
-# Run:     docker compose run --rm training python train.py
+# Run:     docker compose --profile training run --rm training
+# Tune:    docker compose --profile training run --rm -e TRAIN_MODE=tune training
 # =============================================================================
 
 ARG BASE_IMAGE=python:3.11-slim
@@ -75,7 +76,11 @@ ENV PYTHONUNBUFFERED=1 \
     TRANSFORMERS_CACHE=/tmp/huggingface/hub \
     MPLCONFIGDIR=/tmp/matplotlib \
     MLFLOW_TRACKING_URI=http://mlflow:5000 \
-    MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    MLFLOW_S3_ENDPOINT_URL=http://minio:9000 \
+    TRAIN_SCRIPT=train.py \
+    TRAIN_CONFIG=config.yaml \
+    TRAIN_MODE=train \
+    TRAIN_EXTRA_ARGS=
 
 # Create expected dirs when volumes are not mounted yet
 RUN mkdir -p /opt/venv /tmp/.cache /tmp/huggingface/hub /tmp/huggingface/datasets /tmp/matplotlib \
@@ -88,4 +93,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD python -c "import accelerate, boto3, mlflow, torch, transformers, yaml; print('OK')" || exit 1
 
 # Default entrypoint for training runs
-CMD ["sh", "-c", "accelerate launch --num_processes=${NUM_PROCESSES:-1} --config_file=${ACCELERATE_CONFIG_FILE:-accelerate_config.yaml} train.py"]
+CMD ["sh", "-c", "if [ \"${TRAIN_MODE:-train}\" = \"tune\" ]; then exec /opt/venv/bin/python ${TRAIN_SCRIPT:-train.py} --config ${TRAIN_CONFIG:-config.yaml} --mode ${TRAIN_MODE:-train} ${TRAIN_EXTRA_ARGS}; else exec /opt/venv/bin/python -m accelerate.commands.launch --num_processes=${NUM_PROCESSES:-1} --config_file=${ACCELERATE_CONFIG_FILE:-accelerate_config.yaml} ${TRAIN_SCRIPT:-train.py} --config ${TRAIN_CONFIG:-config.yaml} --mode ${TRAIN_MODE:-train} ${TRAIN_EXTRA_ARGS}; fi"]
