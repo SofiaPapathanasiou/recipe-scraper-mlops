@@ -181,10 +181,49 @@ def sanitize_mlflow_params(params: dict[str, Any]) -> dict[str, Any]:
     return {key: sanitize_mlflow_value(value) for key, value in params.items()}
 
 
-def debug_log(accelerator: Accelerator, message: str, *, main_process_only: bool = True) -> None:
+LOG_DELIMITER = "=" * 88
+LOG_SUBDELIMITER = "-" * 88
+
+
+def format_summary_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    if value is None:
+        return "none"
+    return str(value)
+
+
+def emit_console_block(printer: Any, title: str, lines: list[str]) -> None:
+    printer("")
+    printer(LOG_DELIMITER)
+    printer(title)
+    for line in lines:
+        printer(line)
+    printer(LOG_DELIMITER)
+    printer("")
+
+
+def emit_console_summary(printer: Any, title: str, values: dict[str, Any]) -> None:
+    lines = [f"{key:<24}: {format_summary_value(value)}" for key, value in values.items()]
+    emit_console_block(printer, title, lines)
+
+
+def debug_log(
+    accelerator: Accelerator,
+    message: str,
+    *,
+    main_process_only: bool = True,
+    section: str | None = None,
+) -> None:
     if main_process_only and not accelerator.is_main_process:
         return
     prefix = f"[rank {accelerator.process_index}]"
+    if section:
+        accelerator.print("")
+        accelerator.print(f"{prefix} {LOG_SUBDELIMITER}")
+        accelerator.print(f"{prefix} {section}")
     accelerator.print(f"{prefix} {message}")
 
 
@@ -553,7 +592,18 @@ def run_distributed_trial(
             "--context-file",
             str(context_path),
         ]
-        print(f"[tune] Launching trial {trial.number} across {num_processes} process(es).", flush=True)
+        emit_console_summary(
+            print,
+            f"TUNE TRIAL {trial.number:04d} START",
+            {
+                "study_name": context.mlflow_tags.get("study_name"),
+                "trial_number": trial.number,
+                "num_processes": num_processes,
+                "objective_metric": context.objective_metric_name,
+                "experiment_name": context.mlflow_experiment_name,
+            },
+        )
+        print(f"[tune] command: {' '.join(command)}", flush=True)
         process = subprocess.Popen(command)
 
         seen_epochs: set[int] = set()
@@ -561,8 +611,18 @@ def run_distributed_trial(
             for update in load_progress_updates(progress_path, seen_epochs):
                 current_metric = float(update["current_metric"])
                 epoch = int(update["epoch"])
+                emit_console_summary(
+                    print,
+                    f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
+                    {
+                        "global_step": update["global_step"],
+                        "objective_metric": update["objective_metric_name"],
+                        "current_value": current_metric,
+                    },
+                )
                 trial.report(current_metric, step=epoch)
                 if trial.should_prune() and not prune_signal_path.exists():
+                    print(f"[tune] pruning requested for trial {trial.number} at epoch {epoch}.", flush=True)
                     prune_signal_path.write_text("1\n", encoding="utf-8")
             time.sleep(1.0)
 
@@ -570,8 +630,18 @@ def run_distributed_trial(
         for update in load_progress_updates(progress_path, seen_epochs):
             current_metric = float(update["current_metric"])
             epoch = int(update["epoch"])
+            emit_console_summary(
+                print,
+                f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
+                {
+                    "global_step": update["global_step"],
+                    "objective_metric": update["objective_metric_name"],
+                    "current_value": current_metric,
+                },
+            )
             trial.report(current_metric, step=epoch)
             if trial.should_prune() and not prune_signal_path.exists():
+                print(f"[tune] pruning requested for trial {trial.number} at epoch {epoch}.", flush=True)
                 prune_signal_path.write_text("1\n", encoding="utf-8")
 
         if not result_path.exists():
@@ -584,12 +654,41 @@ def run_distributed_trial(
 
         status = result_payload.get("status")
         if status == "complete":
-            return deserialize_training_result(result_payload["result"])
+            result = deserialize_training_result(result_payload["result"])
+            emit_console_summary(
+                print,
+                f"TUNE TRIAL {trial.number:04d} COMPLETE",
+                {
+                    "run_id": result.run_id,
+                    "best_metric_name": result.best_metric_name,
+                    "best_metric": result.best_metric,
+                    "best_checkpoint": result.best_checkpoint,
+                    "exit_code": return_code,
+                },
+            )
+            return result
         if status == "pruned":
+            emit_console_summary(
+                print,
+                f"TUNE TRIAL {trial.number:04d} PRUNED",
+                {
+                    "exit_code": return_code,
+                    "message": result_payload.get("message", f"Trial {trial.number} was pruned."),
+                },
+            )
             raise optuna.TrialPruned(result_payload.get("message", f"Trial {trial.number} was pruned."))
 
         error_message = result_payload.get("error_message", "unknown error")
         error_type = result_payload.get("error_type", "RuntimeError")
+        emit_console_summary(
+            print,
+            f"TUNE TRIAL {trial.number:04d} FAILED",
+            {
+                "error_type": error_type,
+                "error_message": error_message,
+                "exit_code": return_code,
+            },
+        )
         raise RuntimeError(
             f"Distributed trial {trial.number} failed with {error_type}: {error_message} "
             f"(process exit code {return_code})."
@@ -1105,17 +1204,28 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         gradient_accumulation_steps=config_dict["training"]["gradient_accumulation_steps"],
     )
     set_seed(config_dict["training"]["seed"])
+    debug_log(
+        accelerator,
+        "Initializing training worker and loading configuration.",
+        section="TRAINING START",
+    )
+    debug_log(accelerator, f"Execution mode: {context.mode}")
     debug_log(accelerator, f"Using mixed precision mode: {mixed_precision}")
     debug_log(accelerator, f"Training config summary: {json.dumps(summarize_training_config(config_dict), sort_keys=True)}")
 
     tokenizer = AutoTokenizer.from_pretrained(config_dict["model"]["name"])
     model = AutoModelForSeq2SeqLM.from_pretrained(config_dict["model"]["name"])
-    debug_log(accelerator, f"Loaded tokenizer and model for {config_dict['model']['name']}.")
+    debug_log(
+        accelerator,
+        f"Loaded tokenizer and model for {config_dict['model']['name']}.",
+        section="MODEL SETUP",
+    )
     train_loader, val_loader, train_dataset, val_dataset = build_dataloaders(config_dict, tokenizer, accelerator)
     debug_log(
         accelerator,
         f"Dataset summary: train_examples={len(train_dataset)}, val_examples={len(val_dataset)}, "
         f"train_batches={len(train_loader)}, val_batches={len(val_loader)}",
+        section="DATA READY",
     )
 
     optimizer = AdamW(
@@ -1134,6 +1244,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         accelerator,
         f"Optimizer/scheduler summary: steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, "
         f"warmup_steps={warmup_steps}, processes={accelerator.num_processes}",
+        section="OPTIMIZER SETUP",
     )
 
     model, optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
@@ -1167,6 +1278,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         accelerator,
         f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
         f"local checkpoints will be stored under {run_checkpoint_dir}",
+        section="RUN CONTEXT",
     )
 
     try:
@@ -1190,7 +1302,11 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
 
             model.train()
             epoch_start = time.time()
-            debug_log(accelerator, f"Starting epoch {epoch}/{config_dict['training']['num_epochs']}.")
+            debug_log(
+                accelerator,
+                f"Starting epoch {epoch}/{config_dict['training']['num_epochs']}.",
+                section=f"EPOCH {epoch}/{config_dict['training']['num_epochs']}",
+            )
             if accelerator.device.type == "cuda" and torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats(accelerator.device.index or 0)
 
@@ -1245,10 +1361,19 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                             },
                             step=global_step,
                         )
+                        debug_log(
+                            accelerator,
+                            f"Logged MLflow training metrics at global_step={global_step}.",
+                        )
                         train_loss_accumulator = 0.0
                         train_loss_window_count = 0
 
             epoch_time = time.time() - epoch_start
+            debug_log(
+                accelerator,
+                f"Epoch {epoch} training phase finished in {epoch_time:.2f}s. Starting evaluation.",
+                section=f"EPOCH {epoch} EVALUATION",
+            )
             eval_metrics = evaluate(model, val_loader, tokenizer, accelerator, config_dict)
             accelerator.wait_for_everyone()
 
@@ -1259,6 +1384,10 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 **get_peak_gpu_metrics(accelerator),
             }
             current_metric = epoch_metrics[objective_metric_name]
+            debug_log(
+                accelerator,
+                f"Evaluation summary for epoch {epoch}: {json.dumps(epoch_metrics, sort_keys=True)}",
+            )
             if accelerator.is_main_process:
                 append_jsonl_file(
                     context.progress_file,
@@ -1297,6 +1426,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             prune_signal = torch.tensor(int(prune_requested), device=accelerator.device)
             should_prune = accelerator.reduce(prune_signal, reduction="sum").item() > 0
             if should_prune:
+                debug_log(
+                    accelerator,
+                    f"Pruning triggered at epoch {epoch} using {objective_metric_name}={current_metric:.4f}.",
+                    section="TRIAL PRUNED",
+                    main_process_only=False,
+                )
                 raise optuna.TrialPruned(f"Trial pruned at epoch {epoch} with {objective_metric_name}={current_metric:.4f}")
 
             checkpoint_path = save_checkpoint(
@@ -1311,6 +1446,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 accelerator,
                 f"Epoch {epoch} complete. Checkpoint saved to {checkpoint_path}. "
                 f"Metrics: {json.dumps(epoch_metrics, sort_keys=True)}",
+                section=f"EPOCH {epoch} COMPLETE",
             )
 
             if accelerator.is_main_process:
@@ -1331,6 +1467,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         accelerator,
                         f"New best checkpoint at epoch {epoch}: {best_checkpoint} "
                         f"({objective_metric_name}={current_metric:.4f})",
+                        section="BEST MODEL UPDATED",
                     )
 
             final_metrics = epoch_metrics
@@ -1356,8 +1493,30 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     "objective_direction": objective_direction,
                 }
             )
-            accelerator.print(f"Training complete. Run ID: {run_id}")
-            accelerator.print(f"Best checkpoint: {best_checkpoint}")
+            emit_console_summary(
+                accelerator.print,
+                "RUN SUMMARY",
+                {
+                    "mode": context.mode,
+                    "run_id": run_id,
+                    "experiment_name": context.mlflow_experiment_name or get_mlflow_experiment_name(config_dict, context.mode),
+                    "model_name": config_dict["model"]["name"],
+                    "data_source": config_dict["data"]["source"],
+                    "total_epochs": config_dict["training"]["num_epochs"],
+                    "global_steps": global_step,
+                    "best_metric_name": objective_metric_name,
+                    "best_metric": best_metric_to_log(best_metric, objective_direction),
+                    "best_checkpoint": best_checkpoint,
+                    "total_training_time_sec": total_training_time,
+                    "register_model": config_dict["mlflow"]["register_model"] if context.register_model is None else context.register_model,
+                },
+            )
+            if final_metrics:
+                emit_console_summary(
+                    accelerator.print,
+                    "FINAL METRICS",
+                    final_metrics,
+                )
 
         training_result = TrainingResult(
             best_metric=best_metric_to_log(best_metric, objective_direction),
@@ -1374,7 +1533,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             )
         return training_result
     except optuna.TrialPruned:
-        debug_log(accelerator, "Training trial was pruned.", main_process_only=False)
+        debug_log(
+            accelerator,
+            "Training trial was pruned.",
+            main_process_only=False,
+            section="RUN STOPPED",
+        )
         if accelerator.is_main_process:
             write_training_result_payload(
                 context,
@@ -1386,6 +1550,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             accelerator,
             f"Training failed with {error.__class__.__name__}: {error}",
             main_process_only=False,
+            section="RUN FAILED",
         )
         debug_log(
             accelerator,
