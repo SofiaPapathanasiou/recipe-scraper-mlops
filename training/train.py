@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import boto3
+from huggingface_hub import snapshot_download
 import mlflow
 import mlflow.pytorch
 import optuna
@@ -576,6 +577,10 @@ def run_distributed_trial(
         write_yaml_file(config_path, cfg)
         write_json_file(context_path, serialize_training_context(child_context))
 
+        cache_dir = resolve_hf_cache_dir(cfg)
+        ensure_hf_cache_env(cache_dir)
+        child_env = os.environ.copy()
+
         command = [
             sys.executable,
             "-m",
@@ -604,7 +609,7 @@ def run_distributed_trial(
             },
         )
         print(f"[tune] command: {' '.join(command)}", flush=True)
-        process = subprocess.Popen(command)
+        process = subprocess.Popen(command, env=child_env)
 
         seen_epochs: set[int] = set()
         while process.poll() is None:
@@ -836,6 +841,7 @@ def build_dataloaders(
 def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "model_name": cfg["model"]["name"],
+        "model_source": resolve_model_source(cfg),
         "data_source": cfg["data"]["source"],
         "num_epochs": cfg["training"]["num_epochs"],
         "train_batch_size": cfg["training"]["per_device_train_batch_size"],
@@ -854,6 +860,48 @@ def summarize_batch(batch: dict[str, torch.Tensor]) -> str:
         shape = tuple(value.shape)
         parts.append(f"{key}=shape{shape},dtype={value.dtype}")
     return "; ".join(parts)
+
+
+def resolve_hf_cache_dir(cfg: dict[str, Any]) -> Path:
+    configured = cfg.get("huggingface", {}).get("cache_dir")
+    if configured:
+        return Path(configured).expanduser()
+    checkpoint_dir = Path(cfg["checkpointing"]["checkpoint_dir"]).expanduser()
+    return checkpoint_dir.parent / ".hf-cache"
+
+
+def ensure_hf_cache_env(cache_dir: Path) -> None:
+    hub_dir = cache_dir / "hub"
+    datasets_dir = cache_dir / "datasets"
+    asset_dir = cache_dir / "assets"
+    for directory in (cache_dir, hub_dir, datasets_dir, asset_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("HF_HOME", str(cache_dir))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hub_dir))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(hub_dir))
+    os.environ.setdefault("HF_DATASETS_CACHE", str(datasets_dir))
+    os.environ.setdefault("HF_ASSETS_CACHE", str(asset_dir))
+
+
+def resolve_model_source(cfg: dict[str, Any]) -> str:
+    return str(cfg.get("model", {}).get("local_path") or cfg["model"]["name"])
+
+
+def prepare_model_cache(cfg: dict[str, Any]) -> str:
+    model_source = resolve_model_source(cfg)
+    source_path = Path(model_source).expanduser()
+    if source_path.exists():
+        return str(source_path)
+
+    cache_dir = resolve_hf_cache_dir(cfg)
+    ensure_hf_cache_env(cache_dir)
+    model_snapshot_path = snapshot_download(
+        repo_id=cfg["model"]["name"],
+        cache_dir=str(cache_dir),
+    )
+    cfg.setdefault("model", {})["local_path"] = model_snapshot_path
+    return model_snapshot_path
 
 
 # =============================================================================
@@ -1213,11 +1261,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     debug_log(accelerator, f"Using mixed precision mode: {mixed_precision}")
     debug_log(accelerator, f"Training config summary: {json.dumps(summarize_training_config(config_dict), sort_keys=True)}")
 
-    tokenizer = AutoTokenizer.from_pretrained(config_dict["model"]["name"])
-    model = AutoModelForSeq2SeqLM.from_pretrained(config_dict["model"]["name"])
+    model_source = prepare_model_cache(config_dict)
+    tokenizer = AutoTokenizer.from_pretrained(model_source, local_files_only=True)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_source, local_files_only=True)
     debug_log(
         accelerator,
-        f"Loaded tokenizer and model for {config_dict['model']['name']}.",
+        f"Loaded tokenizer and model for {model_source}.",
         section="MODEL SETUP",
     )
     train_loader, val_loader, train_dataset, val_dataset = build_dataloaders(config_dict, tokenizer, accelerator)
@@ -1577,6 +1626,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
 
 def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
     validate_optuna_config(cfg)
+    prepare_model_cache(cfg)
     optuna_cfg = cfg["optuna"]
     study_output_dir = resolve_study_output_dir(cfg)
     study_output_dir.mkdir(parents=True, exist_ok=True)

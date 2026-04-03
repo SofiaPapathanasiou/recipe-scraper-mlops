@@ -26,6 +26,9 @@ checkpointing:
   checkpoint_dir: /app/checkpoints/recipe-correction
   load_best_model_at_end: true
 
+huggingface:
+  cache_dir: /app/checkpoints/huggingface-cache
+
 mlflow:
   experiment_name: recipe-correction-t5
   tuning_experiment_name: recipe-correction-t5-optuna
