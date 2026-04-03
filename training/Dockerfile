@@ -85,6 +85,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Create expected dirs when volumes are not mounted yet
 RUN mkdir -p /opt/venv /tmp/.cache /tmp/huggingface/hub /tmp/huggingface/datasets /tmp/matplotlib \
     /app/checkpoints /app/data/raw /app/data/processed \
+    && chmod +x /app/scripts/run_training.sh \
     && chown -R trainer:trainer /app /tmp/.cache /tmp/huggingface /tmp/matplotlib
 USER trainer
 
@@ -93,4 +94,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD python -c "import accelerate, boto3, mlflow, torch, transformers, yaml; print('OK')" || exit 1
 
 # Default entrypoint for training runs
-CMD ["sh", "-c", "if [ \"${TRAIN_MODE:-train}\" = \"tune\" ]; then exec /opt/venv/bin/python ${TRAIN_SCRIPT:-train.py} --config ${TRAIN_CONFIG:-config.yaml} --mode ${TRAIN_MODE:-train} ${TRAIN_EXTRA_ARGS}; else exec /opt/venv/bin/python -m accelerate.commands.launch --num_processes=${NUM_PROCESSES:-1} --config_file=${ACCELERATE_CONFIG_FILE:-accelerate_config.yaml} ${TRAIN_SCRIPT:-train.py} --config ${TRAIN_CONFIG:-config.yaml} --mode ${TRAIN_MODE:-train} ${TRAIN_EXTRA_ARGS}; fi"]
+ENTRYPOINT ["sh", "/app/scripts/run_training.sh"]
