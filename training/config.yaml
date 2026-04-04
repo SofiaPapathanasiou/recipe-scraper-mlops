@@ -43,7 +43,7 @@ model_registry:
 optuna:
   study_name: t5-small-single-GPU-baseline
   direction: maximize
-  n_trials: 10
+  n_trials: 5
   timeout_sec: null
   storage: null
   sampler:
