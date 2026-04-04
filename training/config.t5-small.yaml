@@ -1,0 +1,84 @@
+model:
+  name: t5-small
+  task_prefix: "fix recipe: "
+
+tokenization:
+  max_input_length: 256
+  max_target_length: 256
+
+training:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  num_epochs: 5
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.10
+  max_grad_norm: 1.0
+  seed: 42
+
+evaluation:
+  logging_steps: 10
+  eval_steps: 500
+  metric_for_best_model: eval_rougeL
+
+checkpointing:
+  checkpoint_dir: /app/checkpoints/recipe-correction
+  load_best_model_at_end: true
+
+huggingface:
+  cache_dir: /app/checkpoints/huggingface-cache
+
+mlflow:
+  experiment_name: recipe-correction-t5-small-baseline
+  tuning_experiment_name: recipe-correction-t5-small-optuna
+  tracking_uri: http://mlflow:5000
+
+model_registry:
+  promote_best_checkpoint: true
+  log_to_mlflow_model_registry: true
+  model_name: recipe-correction-t5-small
+  bucket: model-registry
+
+optuna:
+  study_name: t5-small-single-gpu-baseline
+  direction: maximize
+  n_trials: 5
+  timeout_sec: null
+  storage: null
+  sampler:
+    type: tpe
+    seed: 42
+  pruner:
+    type: median
+    n_startup_trials: 2
+    n_warmup_steps: 1
+  search_space:
+    training.learning_rate:
+      type: float
+      low: 1.0e-5
+      high: 1.0e-3
+      log: true
+    training.weight_decay:
+      type: float
+      low: 0.0
+      high: 0.1
+    training.warmup_ratio:
+      type: float
+      low: 0.0
+      high: 0.2
+    training.gradient_accumulation_steps:
+      type: int
+      low: 1
+      high: 8
+    training.per_device_train_batch_size:
+      type: categorical
+      choices: [4, 8, 16]
+
+data:
+  source: mock
+  mock_train_size: 200
+  mock_val_size: 40
+  minio_bucket: recipe-datasets
+  minio_train_key: train.jsonl
+  minio_val_key: val.jsonl
