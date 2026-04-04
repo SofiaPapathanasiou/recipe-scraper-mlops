@@ -27,6 +27,7 @@ from accelerate import Accelerator
 import accelerate as accelerate_pkg
 from accelerate.utils import set_seed
 from evaluate import load as load_metric
+from mlflow.tracking import MlflowClient
 from pynvml import (
     nvmlDeviceGetCount,
     nvmlDeviceGetHandleByIndex,
@@ -283,6 +284,38 @@ def get_mlflow_experiment_name(cfg: dict[str, Any], mode: str) -> str:
     return cfg["mlflow"].get("active_experiment_name") or cfg["mlflow"]["experiment_name"]
 
 
+def get_optuna_study_name(cfg: dict[str, Any]) -> str:
+    return get_mlflow_experiment_name(cfg, "tune")
+
+
+def get_mlflow_artifact_root_uri(cfg: dict[str, Any]) -> str:
+    configured = str(cfg.get("mlflow", {}).get("artifact_root_uri") or os.getenv("MLFLOW_ARTIFACT_ROOT", "s3://mlflow-artifacts"))
+    return configured.rstrip("/")
+
+
+def get_mlflow_experiment_artifact_location(cfg: dict[str, Any], experiment_name: str) -> str:
+    base_uri = get_mlflow_artifact_root_uri(cfg)
+    experiment_component = sanitize_storage_path_component(experiment_name)
+    return f"{base_uri}/{experiment_component}"
+
+
+def ensure_mlflow_experiment(cfg: dict[str, Any], experiment_name: str) -> str:
+    tracking_uri = cfg["mlflow"]["tracking_uri"]
+    client = MlflowClient(tracking_uri=tracking_uri)
+    existing = client.get_experiment_by_name(experiment_name)
+    if existing is not None:
+        return existing.experiment_id
+
+    artifact_location = get_mlflow_experiment_artifact_location(cfg, experiment_name)
+    try:
+        return client.create_experiment(experiment_name, artifact_location=artifact_location)
+    except Exception:
+        existing = client.get_experiment_by_name(experiment_name)
+        if existing is None:
+            raise
+        return existing.experiment_id
+
+
 def format_mlflow_run_name(run_id: str) -> str:
     return f"{time.strftime('%Y-%m-%d')}-{run_id}"
 
@@ -341,6 +374,8 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         "tuning_experiment_name",
         f"{config['mlflow']['experiment_name']}-optuna",
     )
+    config.setdefault("optuna", {})
+    config["optuna"]["study_name"] = get_optuna_study_name(config)
     model_registry_cfg = config.setdefault("model_registry", {})
     model_registry_cfg.setdefault(
         "model_name",
@@ -499,7 +534,7 @@ def apply_trial_params(base_cfg: dict[str, Any], trial_params: dict[str, Any]) -
 
 def resolve_study_output_dir(cfg: dict[str, Any]) -> Path:
     checkpoint_root = Path(cfg["checkpointing"]["checkpoint_dir"])
-    return checkpoint_root / "optuna" / sanitize_study_name(cfg["optuna"]["study_name"])
+    return checkpoint_root / "optuna" / sanitize_study_name(get_optuna_study_name(cfg))
 
 
 def build_trial_summary(study: optuna.study.Study) -> list[dict[str, Any]]:
@@ -1226,7 +1261,8 @@ def maybe_start_mlflow_run(
 
     experiment_name = context.mlflow_experiment_name or get_mlflow_experiment_name(cfg, context.mode)
     mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
-    mlflow.set_experiment(experiment_name)
+    experiment_id = ensure_mlflow_experiment(cfg, experiment_name)
+    mlflow.set_experiment(experiment_id=experiment_id)
     run = mlflow.start_run(
         run_name=context.mlflow_run_name,
         nested=context.mlflow_nested,
@@ -1786,38 +1822,21 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
     study_output_dir.mkdir(parents=True, exist_ok=True)
 
     experiment_name = get_mlflow_experiment_name(cfg, "tune")
+    study_name = get_optuna_study_name(cfg)
     mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
-    mlflow.set_experiment(experiment_name)
-    parent_run = mlflow.start_run(run_name=optuna_cfg["study_name"])
-    mlflow.set_tag("mlflow.runName", format_mlflow_run_name(parent_run.info.run_id))
-    mlflow.set_tags(
-        {
-            "mode": "tune",
-            "study_name": optuna_cfg["study_name"],
-            "status": "running",
-            "mlflow_experiment_name": experiment_name,
-        }
-    )
-    mlflow.log_params(
-        sanitize_mlflow_params(
-            {
-                "optuna.study_name": optuna_cfg["study_name"],
-                "optuna.direction": optuna_cfg["direction"],
-                "optuna.n_trials": optuna_cfg["n_trials"],
-                "optuna.timeout_sec": optuna_cfg.get("timeout_sec"),
-            }
-        )
-    )
-    log_yaml_artifact(cfg, "study_config.yaml", artifact_path="study")
+    experiment_id = ensure_mlflow_experiment(cfg, experiment_name)
+    mlflow.set_experiment(experiment_id=experiment_id)
 
     study = optuna.create_study(
-        study_name=optuna_cfg["study_name"],
+        study_name=study_name,
         direction=optuna_cfg["direction"],
         storage=optuna_cfg.get("storage"),
         load_if_exists=bool(optuna_cfg.get("storage")),
         sampler=build_optuna_sampler(optuna_cfg.get("sampler", {})),
         pruner=build_optuna_pruner(optuna_cfg.get("pruner", {})),
     )
+    study.set_user_attr("status", "running")
+    study.set_user_attr("mlflow_experiment_name", experiment_name)
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_params = sample_trial_params(trial, optuna_cfg["search_space"])
@@ -1825,13 +1844,10 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
         context = TrainingContext(
             mode="tune",
             mlflow_experiment_name=experiment_name,
-            mlflow_nested=True,
-            mlflow_parent_run_id=parent_run.info.run_id,
             mlflow_tags={
                 "mode": "tune",
-                "study_name": optuna_cfg["study_name"],
+                "study_name": study_name,
                 "trial_number": trial.number,
-                "parent_run_id": parent_run.info.run_id,
             },
             register_model=False,
             trial=trial,
@@ -1868,30 +1884,33 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
         with open(summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2)
 
-        mlflow.log_metric("best_value", float(study.best_value))
-        mlflow.log_metric("best_trial_number", float(best_trial.number))
-        mlflow.log_params(
-            sanitize_mlflow_params(
-                {f"best_param.{key}": value for key, value in best_trial.params.items()}
-            )
-        )
-        mlflow.log_artifact(str(best_config_path), artifact_path="study")
-        log_json_artifact(summary, "trial_summary.json", artifact_path="study")
-        mlflow.set_tags(
+        emit_console_summary(
+            print,
+            "OPTUNA BEST MODEL",
             {
-                "status": "complete",
-                "best_trial_number": str(best_trial.number),
-                "best_run_id": str(best_trial.user_attrs.get("run_id", "unknown")),
-            }
+                "study_name": study.study_name,
+                "best_trial_number": best_trial.number,
+                "best_value": study.best_value,
+                "best_metric_name": best_trial.user_attrs.get("best_metric_name", "unknown"),
+                "best_run_id": best_trial.user_attrs.get("run_id", "unknown"),
+                "best_checkpoint": best_trial.user_attrs.get("best_checkpoint", "none"),
+                "best_config_path": str(best_config_path),
+                "trial_summary_path": str(summary_path),
+                "best_params": best_trial.params,
+                "final_metrics": best_trial.user_attrs.get("final_metrics", {}),
+            },
         )
+
+        study.set_user_attr("best_value", float(study.best_value))
+        study.set_user_attr("best_trial_number", int(best_trial.number))
+        study.set_user_attr("best_run_id", str(best_trial.user_attrs.get("run_id", "unknown")))
+        study.set_user_attr("best_config_path", str(best_config_path))
+        study.set_user_attr("trial_summary_path", str(summary_path))
+        study.set_user_attr("status", "complete")
         return study
     except Exception:
-        if mlflow.active_run() is not None:
-            mlflow.set_tag("status", "failed")
+        study.set_user_attr("status", "failed")
         raise
-    finally:
-        if mlflow.active_run() is not None:
-            mlflow.end_run()
 
 
 # =============================================================================
