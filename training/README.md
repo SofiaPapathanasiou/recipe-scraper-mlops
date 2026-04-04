@@ -147,7 +147,10 @@ docker compose exec jupyter python train.py --config /app/config.yaml --mode tra
 Launch the notebook workbench from Jupyter Lab:
 
 - Open `notebooks/train_workbench.ipynb`
-- Use it to inspect the runtime config and launch the same training paths used by the container workflows
+- Use it to inspect the runtime config and launch the same `train.py` and Accelerate code paths used by the container workflows
+- The notebook now resolves the repo root, training script, and Accelerate config from the live environment instead of assuming `/app`
+- Leave `EXACT_RUNTIME_NUM_PROCESSES = None` to mirror `train.py` worker selection, or set it explicitly for a notebook-only override
+- Training summaries use the resolved config returned by the run, and tune summaries include the best run ID, checkpoint path, `best_config.yaml`, and `trial_summary.json`
 
 Useful interactive development commands:
 
@@ -351,8 +354,14 @@ docker compose exec jupyter bash
 Run an interactive experiment from inside Jupyter:
 
 ```bash
-python train.py --config /app/config.yaml --mode train --experiment-name notebook-dev
+python train.py --config config.yaml --mode train --experiment-name notebook-dev
 ```
+
+Or use the notebook workbench for the same flows from Jupyter Lab:
+
+- `MODE="train"` with `EXECUTION_MODE="interactive"` runs `train_worker(...)` in-kernel
+- `MODE="train"` with `EXECUTION_MODE="exact-runtime"` launches `accelerate.commands.launch` against `train.py`
+- `MODE="tune"` runs the real Optuna study controller path from `train.py`
 
 Run a clean scripted training job in the separate training container:
 
