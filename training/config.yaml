@@ -3,22 +3,22 @@ model:
   task_prefix: "fix recipe: "
 
 tokenization:
-  max_input_length: 512
-  max_target_length: 512
+  max_input_length: 256
+  max_target_length: 256
 
 training:
-  learning_rate: 3.0e-4
+  learning_rate: 1.0e-4
   weight_decay: 0.01
-  num_epochs: 3
+  num_epochs: 5
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 8
   gradient_accumulation_steps: 4
-  warmup_ratio: 0.06
+  warmup_ratio: 0.10
   max_grad_norm: 1.0
   seed: 42
 
 evaluation:
-  logging_steps: 50
+  logging_steps: 10
   eval_steps: 500
   metric_for_best_model: eval_rougeL
 
@@ -30,7 +30,7 @@ huggingface:
   cache_dir: /app/checkpoints/huggingface-cache
 
 mlflow:
-  experiment_name: recipe-correction-t5
+  experiment_name: recipe-correction-t5-baseline
   tuning_experiment_name: recipe-correction-t5-optuna
   tracking_uri: http://mlflow:5000
 
@@ -41,7 +41,7 @@ model_registry:
   bucket: model-registry
 
 optuna:
-  study_name: recipe-correction-t5-optuna
+  study_name: t5-small-single-GPU-baseline
   direction: maximize
   n_trials: 10
   timeout_sec: null
@@ -76,7 +76,7 @@ optuna:
       choices: [4, 8, 16]
 
 data:
-  source: mock
+  source: minio
   mock_train_size: 200
   mock_val_size: 40
   minio_bucket: recipe-datasets
