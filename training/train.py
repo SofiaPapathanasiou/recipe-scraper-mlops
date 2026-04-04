@@ -170,6 +170,13 @@ def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return flattened
 
 
+def filter_mlflow_run_params(cfg: dict[str, Any], mode: str) -> dict[str, Any]:
+    filtered_cfg = copy.deepcopy(cfg)
+    if mode != "tune":
+        filtered_cfg.pop("optuna", None)
+    return flatten_dict(filtered_cfg)
+
+
 def sanitize_mlflow_value(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)):
         return value
@@ -254,6 +261,11 @@ def log_json_artifact(data: Any, filename: str, artifact_path: str | None = None
     )
 
 
+def sanitize_storage_path_component(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    return cleaned.strip("-") or "unknown"
+
+
 def write_yaml_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
@@ -329,6 +341,14 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         "tuning_experiment_name",
         f"{config['mlflow']['experiment_name']}-optuna",
     )
+    model_registry_cfg = config.setdefault("model_registry", {})
+    model_registry_cfg.setdefault(
+        "model_name",
+        config.get("mlflow", {}).get("registered_model_name") or config["model"]["name"],
+    )
+    model_registry_cfg.setdefault("bucket", os.getenv("MINIO_BUCKET_MODELS", "model-registry"))
+    model_registry_cfg.setdefault("promote_best_checkpoint", True)
+    model_registry_cfg.setdefault("log_to_mlflow_model_registry", True)
     return config
 
 
@@ -1069,11 +1089,33 @@ def get_peak_gpu_metrics(accelerator: Accelerator) -> dict[str, float]:
     }
 
 
+def find_git_repo_root(start_path: Path) -> Path | None:
+    for candidate in [start_path, *start_path.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start_path), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        repo_root = result.stdout.strip()
+        return Path(repo_root) if repo_root else None
+    except Exception:
+        return None
+
+
 def log_environment_info() -> dict[str, str]:
     def git_commit_hash() -> str:
         try:
+            repo_root = find_git_repo_root(Path(__file__).resolve().parent)
+            git_cmd = ["git", "rev-parse", "HEAD"]
+            if repo_root is not None:
+                git_cmd = ["git", "-C", str(repo_root), "rev-parse", "HEAD"]
             result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+                git_cmd,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1192,7 +1234,7 @@ def maybe_start_mlflow_run(
     )
     mlflow.set_tag("mlflow.runName", format_mlflow_run_name(run.info.run_id))
 
-    flat_params = flatten_dict(cfg)
+    flat_params = filter_mlflow_run_params(cfg, context.mode)
     flat_params.update(
         {
             "effective_batch_size": (
@@ -1223,21 +1265,77 @@ def maybe_start_mlflow_run(
     return run.info.run_id
 
 
-def maybe_register_best_model(
+def upload_directory_to_minio(local_dir: Path, bucket: str, prefix: str) -> dict[str, str]:
+    if not local_dir.exists() or not local_dir.is_dir():
+        raise ValueError(f"Cannot upload missing directory to MinIO: {local_dir}")
+
+    client = build_s3_client()
+    uploaded_keys: list[str] = []
+    normalized_prefix = prefix.strip("/")
+
+    for path in sorted(local_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(local_dir).as_posix()
+        object_key = f"{normalized_prefix}/{relative_path}" if normalized_prefix else relative_path
+        client.upload_file(str(path), bucket, object_key)
+        uploaded_keys.append(object_key)
+
+    if not uploaded_keys:
+        raise ValueError(f"No files found to upload from {local_dir}")
+
+    return {
+        "bucket": bucket,
+        "prefix": normalized_prefix,
+        "s3_uri": f"s3://{bucket}/{normalized_prefix}" if normalized_prefix else f"s3://{bucket}",
+        "file_count": str(len(uploaded_keys)),
+    }
+
+
+def promote_best_checkpoint_to_model_registry(
     cfg: dict[str, Any],
     best_checkpoint: str | None,
-    register_model_override: bool | None = None,
-) -> None:
-    should_register = cfg["mlflow"]["register_model"] if register_model_override is None else register_model_override
-    if not best_checkpoint or not should_register:
-        return
+    run_id: str | None,
+    experiment_name: str,
+) -> dict[str, str] | None:
+    if not best_checkpoint:
+        return None
+    if not bool(cfg.get("model_registry", {}).get("promote_best_checkpoint", True)):
+        return None
 
+    model_registry_cfg = cfg.get("model_registry", {})
+    model_bucket = str(model_registry_cfg.get("bucket") or os.getenv("MINIO_BUCKET_MODELS", "model-registry"))
+    model_name = sanitize_storage_path_component(
+        str(model_registry_cfg.get("model_name") or cfg.get("mlflow", {}).get("registered_model_name") or cfg["model"]["name"])
+    )
+    experiment_component = sanitize_storage_path_component(experiment_name)
+    run_component = sanitize_storage_path_component(run_id or "manual-run")
+    prefix = f"{model_name}/experiments/{experiment_component}/runs/{run_component}/best-checkpoint"
+    return upload_directory_to_minio(Path(best_checkpoint), model_bucket, prefix)
+
+
+def maybe_log_best_model_to_mlflow_registry(
+    cfg: dict[str, Any],
+    best_checkpoint: str | None,
+) -> dict[str, str] | None:
+    if not best_checkpoint:
+        return None
+
+    model_registry_cfg = cfg.get("model_registry", {})
+    if not bool(model_registry_cfg.get("log_to_mlflow_model_registry", True)):
+        return None
+
+    registered_model_name = str(model_registry_cfg.get("model_name") or cfg["model"]["name"])
     best_model = AutoModelForSeq2SeqLM.from_pretrained(best_checkpoint)
-    mlflow.pytorch.log_model(
+    model_info = mlflow.pytorch.log_model(
         pytorch_model=best_model,
         artifact_path="best-model",
-        registered_model_name=cfg["mlflow"]["registered_model_name"],
+        registered_model_name=registered_model_name,
     )
+    return {
+        "registered_model_name": registered_model_name,
+        "model_uri": model_info.model_uri,
+    }
 
 
 # =============================================================================
@@ -1501,7 +1599,6 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             if accelerator.is_main_process:
                 mlflow.log_metrics(epoch_metrics, step=global_step)
                 mlflow.log_metric("objective_value", current_metric, step=global_step)
-                mlflow.log_artifacts(checkpoint_path, artifact_path=f"checkpoints/epoch-{epoch:02d}")
 
                 if is_better_metric(current_metric, best_metric, objective_direction):
                     best_metric = current_metric
@@ -1529,26 +1626,79 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 best_metric_to_log(best_metric, objective_direction),
                 step=global_step,
             )
-            maybe_register_best_model(config_dict, best_checkpoint, context.register_model)
-            mlflow.set_tags(
-                {
-                    "mode": context.mode,
-                    "model_name": config_dict["model"]["name"],
-                    "task": "recipe-correction",
-                    "data_source": config_dict["data"]["source"],
-                    "status": "complete",
-                    "best_checkpoint": best_checkpoint or "none",
-                    "objective_metric_name": objective_metric_name,
-                    "objective_direction": objective_direction,
-                }
+            experiment_name = context.mlflow_experiment_name or get_mlflow_experiment_name(config_dict, context.mode)
+            promoted_model_info = promote_best_checkpoint_to_model_registry(
+                config_dict,
+                best_checkpoint,
+                run_id,
+                experiment_name,
             )
+            mlflow_registry_info = maybe_log_best_model_to_mlflow_registry(
+                config_dict,
+                best_checkpoint,
+            )
+            run_tags = {
+                "mode": context.mode,
+                "model_name": config_dict["model"]["name"],
+                "task": "recipe-correction",
+                "data_source": config_dict["data"]["source"],
+                "status": "complete",
+                "best_checkpoint": best_checkpoint or "none",
+                "objective_metric_name": objective_metric_name,
+                "objective_direction": objective_direction,
+                "best_model_storage": "minio-model-registry+mlflow-model-registry",
+            }
+            if promoted_model_info is not None:
+                run_tags.update(
+                    {
+                        "best_checkpoint_s3_uri": promoted_model_info["s3_uri"],
+                        "best_model_s3_uri": promoted_model_info["s3_uri"],
+                        "best_model_bucket": promoted_model_info["bucket"],
+                        "best_model_prefix": promoted_model_info["prefix"],
+                    }
+                )
+                mlflow.log_params(
+                    {
+                        "best_checkpoint_s3_uri": promoted_model_info["s3_uri"],
+                        "best_model_bucket": promoted_model_info["bucket"],
+                        "best_model_prefix": promoted_model_info["prefix"],
+                    }
+                )
+                log_json_artifact(
+                    {
+                        "run_id": run_id,
+                        "experiment_name": experiment_name,
+                        "best_checkpoint_local_path": best_checkpoint,
+                        "best_checkpoint_s3_uri": promoted_model_info["s3_uri"],
+                        "best_model_s3_uri": promoted_model_info["s3_uri"],
+                        "best_model_bucket": promoted_model_info["bucket"],
+                        "best_model_prefix": promoted_model_info["prefix"],
+                        "uploaded_file_count": int(promoted_model_info["file_count"]),
+                    },
+                    "best_model_pointer.json",
+                    artifact_path="model_registry",
+                )
+            if mlflow_registry_info is not None:
+                run_tags.update(
+                    {
+                        "mlflow_registered_model_name": mlflow_registry_info["registered_model_name"],
+                        "mlflow_best_model_uri": mlflow_registry_info["model_uri"],
+                    }
+                )
+                mlflow.log_params(
+                    {
+                        "mlflow_registered_model_name": mlflow_registry_info["registered_model_name"],
+                        "mlflow_best_model_uri": mlflow_registry_info["model_uri"],
+                    }
+                )
+            mlflow.set_tags(run_tags)
             emit_console_summary(
                 accelerator.print,
                 "RUN SUMMARY",
                 {
                     "mode": context.mode,
                     "run_id": run_id,
-                    "experiment_name": context.mlflow_experiment_name or get_mlflow_experiment_name(config_dict, context.mode),
+                    "experiment_name": experiment_name,
                     "model_name": config_dict["model"]["name"],
                     "data_source": config_dict["data"]["source"],
                     "total_epochs": config_dict["training"]["num_epochs"],
@@ -1556,8 +1706,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     "best_metric_name": objective_metric_name,
                     "best_metric": best_metric_to_log(best_metric, objective_direction),
                     "best_checkpoint": best_checkpoint,
+                    "best_checkpoint_s3_uri": promoted_model_info["s3_uri"] if promoted_model_info is not None else "none",
                     "total_training_time_sec": total_training_time,
-                    "register_model": config_dict["mlflow"]["register_model"] if context.register_model is None else context.register_model,
+                    "best_model_storage": "minio-model-registry+mlflow-model-registry",
+                    "mlflow_registered_model_name": (
+                        mlflow_registry_info["registered_model_name"] if mlflow_registry_info is not None else "none"
+                    ),
                 },
             )
             if final_metrics:
