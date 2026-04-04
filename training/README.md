@@ -305,12 +305,13 @@ python train.py --config config.yaml --mode tune
 ```
 
 - Uses Optuna settings and search space from `config.yaml`
-- Creates one parent study run plus nested child runs in MLflow
+- Uses the tuning experiment name as the Optuna study name
+- Creates one top-level MLflow run per Optuna trial within the tuning experiment
 - Launches each trial with `accelerate` across the requested visible GPUs
 - Writes the winning resolved config to:
 
 ```text
-<checkpoint_dir>/optuna/<study_name>/best_config.yaml
+<checkpoint_dir>/optuna/<tuning_experiment_name>/best_config.yaml
 ```
 
 Override the experiment name for either mode:

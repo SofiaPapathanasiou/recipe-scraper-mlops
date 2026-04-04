@@ -41,7 +41,7 @@ model_registry:
   bucket: model-registry
 
 optuna:
-  study_name: recipe-correction-t5-study
+  study_name: recipe-correction-t5-optuna
   direction: maximize
   n_trials: 10
   timeout_sec: null
