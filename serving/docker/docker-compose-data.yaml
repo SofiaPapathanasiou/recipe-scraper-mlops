@@ -50,7 +50,7 @@
 
 
 volumes:
-  recipe-nlg-data:
+  recipe-nlg:
     external: true
 
 services:
@@ -59,7 +59,7 @@ services:
       context: .
       dockerfile: Dockerfile.swift
     volumes:
-      - cleaner-data:/data
+      - recipe-nlg:/data
       - ~/app-cred-proj22-swift-openrc.sh:/credentials/openrc.sh:ro
     command:
       - bash
