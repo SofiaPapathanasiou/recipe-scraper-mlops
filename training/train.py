@@ -1561,6 +1561,7 @@ def maybe_start_mlflow_run(
     flat_params = filter_mlflow_run_params(cfg, context.mode)
     flat_params.update(
         {
+            "accelerate.mixed_precision": mixed_precision,
             "effective_batch_size": (
                 cfg["training"]["per_device_train_batch_size"]
                 * cfg["training"]["gradient_accumulation_steps"]
