@@ -294,9 +294,22 @@ python train.py --config config.yaml --mode train
 ```
 
 - Uses [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config.yaml)
+- Defaults to `data.source: mock` so local smoke-test runs work without uploading MinIO dataset objects
 - Tracks runs in MLflow
 - Saves checkpoints under `/app/checkpoints/...`
 - In the training container, this path is launched via `accelerate`
+
+To train against MinIO-backed JSONL data instead, change [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config.yaml) to:
+
+```yaml
+data:
+  source: minio
+  minio_bucket: recipe-datasets
+  minio_train_key: train.jsonl
+  minio_val_key: val.jsonl
+```
+
+Those objects must already exist in the bucket. The built-in `minio-init` service creates buckets only; it does not upload dataset files.
 
 Hyperparameter tuning:
 

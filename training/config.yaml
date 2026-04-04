@@ -76,7 +76,7 @@ optuna:
       choices: [4, 8, 16]
 
 data:
-  source: minio
+  source: mock
   mock_train_size: 200
   mock_val_size: 40
   minio_bucket: recipe-datasets

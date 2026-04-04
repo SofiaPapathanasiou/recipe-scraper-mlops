@@ -552,6 +552,21 @@ def build_trial_summary(study: optuna.study.Study) -> list[dict[str, Any]]:
     return summary
 
 
+def summarize_trial_counts(study: optuna.study.Study) -> dict[str, int]:
+    counts = {
+        "complete": 0,
+        "failed": 0,
+        "pruned": 0,
+        "running": 0,
+        "waiting": 0,
+    }
+    for trial in study.trials:
+        state_name = trial.state.name.lower()
+        counts[state_name] = counts.get(state_name, 0) + 1
+    counts["total"] = len(study.trials)
+    return counts
+
+
 def ensure_supported_tune_runtime() -> None:
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     if world_size > 1:
@@ -846,7 +861,17 @@ def build_s3_client() -> Any:
 def load_minio_dataset(cfg: dict[str, Any], tokenizer: Any, split: str) -> RecipeTextDataset:
     key_name = "minio_train_key" if split == "train" else "minio_val_key"
     client = build_s3_client()
-    response = client.get_object(Bucket=cfg["data"]["minio_bucket"], Key=cfg["data"][key_name])
+    bucket = cfg["data"]["minio_bucket"]
+    key = cfg["data"][key_name]
+    try:
+        response = client.get_object(Bucket=bucket, Key=key)
+    except client.exceptions.NoSuchKey as exc:
+        raise FileNotFoundError(
+            "MinIO dataset object not found for "
+            f"{split!r} split: bucket={bucket!r}, key={key!r}. "
+            "Either upload that JSONL object to MinIO or switch config.yaml "
+            "to data.source: mock for local smoke-test training."
+        ) from exc
     payload = response["Body"].read().decode("utf-8")
 
     pairs: list[tuple[str, str]] = []
@@ -1837,10 +1862,12 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
     )
     study.set_user_attr("status", "running")
     study.set_user_attr("mlflow_experiment_name", experiment_name)
+    study.set_user_attr("study_output_dir", str(study_output_dir))
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_params = sample_trial_params(trial, optuna_cfg["search_space"])
         resolved_cfg = apply_trial_params(cfg, trial_params)
+        trial.set_user_attr("trial_params", trial_params)
         context = TrainingContext(
             mode="tune",
             mlflow_experiment_name=experiment_name,
@@ -1855,34 +1882,89 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
             objective_metric_name=cfg["evaluation"]["metric_for_best_model"],
             trial_params=trial_params,
         )
-        result = run_distributed_trial(resolved_cfg, context=context, trial=trial)
-        trial.set_user_attr("run_id", result.run_id)
-        trial.set_user_attr("best_checkpoint", result.best_checkpoint)
-        trial.set_user_attr("best_metric_name", result.best_metric_name)
-        trial.set_user_attr("final_metrics", result.final_metrics)
-        trial.set_user_attr("resolved_config", result.resolved_config)
-        return result.best_metric
+        try:
+            result = run_distributed_trial(resolved_cfg, context=context, trial=trial)
+            trial.set_user_attr("run_id", result.run_id)
+            trial.set_user_attr("best_checkpoint", result.best_checkpoint)
+            trial.set_user_attr("best_metric_name", result.best_metric_name)
+            trial.set_user_attr("final_metrics", result.final_metrics)
+            trial.set_user_attr("resolved_config", result.resolved_config)
+            return result.best_metric
+        except optuna.TrialPruned as error:
+            message = str(error) or f"Trial {trial.number} was pruned."
+            trial.set_user_attr("status_message", message)
+            raise
+        except Exception as error:
+            failure_type = error.__class__.__name__
+            failure_message = str(error) or repr(error)
+            trial.set_user_attr("failure_type", failure_type)
+            trial.set_user_attr("failure_message", failure_message)
+            trial.set_user_attr("failure_traceback", traceback.format_exc())
+            trial.set_user_attr("resolved_config", resolved_cfg)
+            emit_console_summary(
+                print,
+                f"TUNE TRIAL {trial.number:04d} FAILURE RECORDED",
+                {
+                    "error_type": failure_type,
+                    "error_message": failure_message,
+                    "study_name": study_name,
+                    "trial_number": trial.number,
+                },
+            )
+            raise
 
     try:
         study.optimize(
             objective,
             n_trials=int(optuna_cfg["n_trials"]),
             timeout=optuna_cfg.get("timeout_sec"),
+            catch=(Exception,),
         )
-
-        completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
-        if not completed_trials:
-            raise RuntimeError("Optuna study finished without any completed trials.")
-
-        best_trial = study.best_trial
-        best_config = best_trial.user_attrs["resolved_config"]
-        best_config_path = study_output_dir / "best_config.yaml"
-        write_yaml_file(best_config_path, best_config)
 
         summary = build_trial_summary(study)
         summary_path = study_output_dir / "trial_summary.json"
         with open(summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2)
+
+        trial_counts = summarize_trial_counts(study)
+        study.set_user_attr("trial_summary_path", str(summary_path))
+        study.set_user_attr("trial_counts", trial_counts)
+        emit_console_summary(
+            print,
+            "OPTUNA STUDY SUMMARY",
+            {
+                "study_name": study.study_name,
+                "total_trials": trial_counts["total"],
+                "completed_trials": trial_counts["complete"],
+                "failed_trials": trial_counts["failed"],
+                "pruned_trials": trial_counts["pruned"],
+                "trial_summary_path": str(summary_path),
+            },
+        )
+
+        completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+        if not completed_trials:
+            failed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.FAIL]
+            last_failure = failed_trials[-1] if failed_trials else None
+            if last_failure is not None:
+                failure_type = last_failure.user_attrs.get("failure_type", "unknown")
+                failure_message = last_failure.user_attrs.get("failure_message", "unknown error")
+                raise RuntimeError(
+                    "Optuna study finished without any completed trials. "
+                    f"failed={trial_counts['failed']}, pruned={trial_counts['pruned']}. "
+                    f"Last failed trial {last_failure.number}: {failure_type}: {failure_message}. "
+                    f"See {summary_path} for the full trial summary."
+                )
+            raise RuntimeError(
+                "Optuna study finished without any completed trials. "
+                f"failed={trial_counts['failed']}, pruned={trial_counts['pruned']}. "
+                f"See {summary_path} for the full trial summary."
+            )
+
+        best_trial = study.best_trial
+        best_config = best_trial.user_attrs["resolved_config"]
+        best_config_path = study_output_dir / "best_config.yaml"
+        write_yaml_file(best_config_path, best_config)
 
         emit_console_summary(
             print,
@@ -1905,11 +1987,23 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
         study.set_user_attr("best_trial_number", int(best_trial.number))
         study.set_user_attr("best_run_id", str(best_trial.user_attrs.get("run_id", "unknown")))
         study.set_user_attr("best_config_path", str(best_config_path))
-        study.set_user_attr("trial_summary_path", str(summary_path))
         study.set_user_attr("status", "complete")
         return study
-    except Exception:
+    except Exception as error:
         study.set_user_attr("status", "failed")
+        study.set_user_attr("error_type", error.__class__.__name__)
+        study.set_user_attr("error_message", str(error) or repr(error))
+        study.set_user_attr("trial_counts", summarize_trial_counts(study))
+        emit_console_summary(
+            print,
+            "OPTUNA STUDY FAILED",
+            {
+                "study_name": study.study_name,
+                "error_type": error.__class__.__name__,
+                "error_message": str(error) or repr(error),
+                **summarize_trial_counts(study),
+            },
+        )
         raise
 
 
