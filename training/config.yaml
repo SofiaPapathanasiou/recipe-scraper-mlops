@@ -33,8 +33,12 @@ mlflow:
   experiment_name: recipe-correction-t5
   tuning_experiment_name: recipe-correction-t5-optuna
   tracking_uri: http://mlflow:5000
-  register_model: true
-  registered_model_name: recipe-correction-t5
+
+model_registry:
+  promote_best_checkpoint: true
+  log_to_mlflow_model_registry: true
+  model_name: recipe-correction-t5
+  bucket: model-registry
 
 optuna:
   study_name: recipe-correction-t5-study

@@ -202,21 +202,26 @@ services:
       JUPYTER_LAB_EXTENSION_MANAGER: "none"
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
       TORCH_BUILD_MODE: ${TORCH_BUILD_MODE:-auto}
-      PROJECT_ROOT: /workspace
+      PROJECT_ROOT: /app
+      PYTHONPATH: /app
       VENV_PATH: /opt/venv
+      TRAIN_SCRIPT: /app/train.py
+      TRAIN_CONFIG: /app/config.yaml
+      ACCELERATE_CONFIG_FILE: /app/accelerate_config.yaml
+      NUM_PROCESSES: ${NUM_PROCESSES:-2}
       <<: *runtime-env
-    working_dir: /workspace/notebooks
+    working_dir: /app
     command:
       - bash
       - -lc
       - |
-        bash /workspace/scripts/select_torch_build.sh && \
+        bash /app/scripts/select_torch_build.sh && \
         exec /opt/venv/bin/jupyter lab \
           --ip=0.0.0.0 \
           --port=8888 \
           --no-browser \
           --allow-root \
-          --notebook-dir=/workspace/notebooks \
+          --notebook-dir=/app/notebooks \
           --ServerApp.token="${JUPYTER_TOKEN:-}" \
           --ServerApp.password='' \
           --ServerApp.allow_origin='*' \
@@ -224,7 +229,8 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - .:/workspace
+      - .:/app
+      - ../.git:/app/.git:ro
     gpus: all
     <<: *mlops-network
 
@@ -242,6 +248,7 @@ services:
       <<: *runtime-env
     volumes:
       - .:/app
+      - ../.git:/app/.git:ro
       - ./data:/app/data
       - ./checkpoints:/app/checkpoints
     gpus: all
