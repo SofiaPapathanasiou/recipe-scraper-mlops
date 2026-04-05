@@ -32,16 +32,12 @@ huggingface:
 mlflow:
   experiment_name: recipe-correction-t5-small-baseline
   tuning_experiment_name: recipe-correction-t5-small-optuna
-  tracking_uri: http://mlflow:5000
 
 model_registry:
-  promote_best_checkpoint: true
   log_to_mlflow_model_registry: true
   model_name: recipe-correction-t5-small
-  bucket: model-registry
 
 optuna:
-  study_name: t5-small-single-gpu-baseline
   direction: maximize
   n_trials: 5
   timeout_sec: null
@@ -79,6 +75,3 @@ data:
   source: mock
   mock_train_size: 200
   mock_val_size: 40
-  minio_bucket: recipe-datasets
-  minio_train_key: train.jsonl
-  minio_val_key: val.jsonl

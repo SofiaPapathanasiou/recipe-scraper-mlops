@@ -1,14 +1,13 @@
 # Training
 
 This directory contains the containerized training and experimentation stack for the
-recipe-correction model. The Docker Compose setup gives you:
+recipe-correction model. The local Docker Compose setup now runs only:
 
-- MinIO for dataset/model artifact storage
-- PostgreSQL for the MLflow backend store
-- MLflow for experiment tracking
-- Redis and Redis Insight
 - A Jupyter Lab container for interactive development
 - A separate training job container for scripted train/tune runs
+
+Both containers log to the remote MLflow server at `http://129.114.26.23:8000/` by
+default. You can override that at runtime with `MLFLOW_TRACKING_URI`.
 
 ## Prerequisites
 
@@ -21,62 +20,50 @@ Important defaults there include:
 
 - `JUPYTER_TOKEN` for Jupyter auth
 - `TORCH_BUILD_MODE` with `auto`, `cpu`, or `gpu`
-- `NUM_PROCESSES` for Accelerate/trial worker count
-- `MLFLOW_EXTRA_ALLOWED_HOSTS` and `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` for MLflow UI access
+- `NUM_PROCESSES` for Accelerate or tune worker count
+- `MLFLOW_TRACKING_URI` to override the remote tracking server
 
 ## Container Layout
 
 The long-running development stack is:
 
-- `minio`
-- `minio-init`
-- `postgres`
-- `mlflow`
-- `redis`
-- `redis-insight`
 - `jupyter`
 
-The `training` service is different: it is a job container behind the `training` profile,
-so you typically run it on demand instead of keeping it up in the background.
+The `training` service is a job container behind the `training` profile, so you
+typically run it on demand instead of keeping it up in the background.
 
 ## Build Images
 
-Build the always-on stack:
-
-```bash
-docker compose build
-```
-
-Build the training image too:
-
-```bash
-docker compose --profile training build
-```
-
-Rebuild only the interactive dev image:
+Build the Jupyter image:
 
 ```bash
 docker compose build jupyter
 ```
 
-Rebuild only the training image:
+Build the training image:
 
 ```bash
 docker compose --profile training build training
 ```
 
-## Bring Up The Stack
-
-Start all long-running containers in the background:
+Build both images:
 
 ```bash
-docker compose up -d
+docker compose --profile training build
+```
+
+## Bring Up Jupyter
+
+Start Jupyter in the background:
+
+```bash
+docker compose up -d jupyter
 ```
 
 Watch startup logs:
 
 ```bash
-docker compose logs -f
+docker compose logs -f jupyter
 ```
 
 Check container status:
@@ -85,30 +72,15 @@ Check container status:
 docker compose ps
 ```
 
-Open the main UIs:
+Open Jupyter Lab:
 
-- MLflow: `http://localhost:5000`
-- MinIO API: `http://localhost:9000`
-- MinIO Console: `http://localhost:9001`
-- Redis Insight: `http://localhost:5540`
 - Jupyter Lab: `http://localhost:8888`
+- Remote MLflow UI: `http://129.114.26.23:8000/`
 
 If `JUPYTER_TOKEN` is blank, Docker/Jupyter may generate one at startup. Retrieve it with:
 
 ```bash
 docker compose logs jupyter
-```
-
-If you want to start only the infra without Jupyter:
-
-```bash
-docker compose up -d minio minio-init postgres mlflow redis redis-insight
-```
-
-If you want to restart just one service after config changes:
-
-```bash
-docker compose up -d --force-recreate mlflow
 ```
 
 ## Interactive Development In Jupyter
@@ -119,12 +91,6 @@ It bind-mounts this repo into `/app`, exposes Jupyter Lab on port `8888`, and ru
 [`scripts/select_torch_build.sh`](/home/cc/recipe-scraper-mlops/training/scripts/select_torch_build.sh)
 on startup so the container installs the CPU or GPU PyTorch extra that matches
 `TORCH_BUILD_MODE`.
-
-Start Jupyter if the rest of the stack is already up:
-
-```bash
-docker compose up -d jupyter
-```
 
 Open a shell inside the running Jupyter container:
 
@@ -148,9 +114,7 @@ Launch the notebook workbench from Jupyter Lab:
 
 - Open `notebooks/train_workbench.ipynb`
 - Use it to inspect the runtime config and launch the same `train.py` and Accelerate code paths used by the container workflows
-- The notebook now resolves the repo root, training script, and Accelerate config from the live environment instead of assuming `/app`
 - Leave `EXACT_RUNTIME_NUM_PROCESSES = None` to mirror `train.py` worker selection, or set it explicitly for a notebook-only override
-- Training summaries use the resolved config returned by the run, and tune summaries include the best run ID, checkpoint path, `best_config.yaml`, and `trial_summary.json`
 
 Useful interactive development commands:
 
@@ -196,6 +160,7 @@ Key environment variables:
 - `TRAIN_EXTRA_ARGS`: extra CLI flags appended to the training command
 - `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count
 - `ACCELERATE_CONFIG_FILE`: Accelerate config path, default `accelerate_config.yaml`
+- `MLFLOW_TRACKING_URI`: remote tracking server override
 
 The training container is not started by `docker compose up -d` unless you explicitly
 run it with the `training` profile.
@@ -297,22 +262,12 @@ python train.py --config config.yaml --mode train
 ```
 
 - Uses [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config.yaml)
-- Defaults to `data.source: mock` so local smoke-test runs work without uploading MinIO dataset objects
-- Tracks runs in MLflow
-- Saves checkpoints under `/app/checkpoints/...`
+- Uses mock-generated data only in this refactor
+- Tracks runs in the remote MLflow server
+- Saves local checkpoints under `/app/checkpoints/...`
+- Logs the best checkpoint directory to MLflow artifacts under `checkpoints/best`
+- Optionally registers the best model in the MLflow Model Registry
 - In the training container, this path is launched via `accelerate`
-
-To train against MinIO-backed JSONL data instead, change [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config.yaml) to:
-
-```yaml
-data:
-  source: minio
-  minio_bucket: recipe-datasets
-  minio_train_key: train.jsonl
-  minio_val_key: val.jsonl
-```
-
-Those objects must already exist in the bucket. The built-in `minio-init` service creates buckets only; it does not upload dataset files.
 
 Hyperparameter tuning:
 
@@ -344,10 +299,10 @@ Without a CLI override:
 
 ## Typical Workflows
 
-Bring up the full dev stack, then iterate in Jupyter:
+Bring up Jupyter, then iterate interactively:
 
 ```bash
-docker compose up -d
+docker compose up -d jupyter
 docker compose exec jupyter bash
 ```
 
@@ -377,32 +332,31 @@ docker compose --profile training run --rm -e TRAIN_MODE=tune training
 
 ## Logs, Status, And Cleanup
 
-Follow logs for one service:
+Follow logs:
 
 ```bash
 docker compose logs -f jupyter
-docker compose logs -f mlflow
 docker compose logs -f training
 ```
 
-Stop the long-running stack:
+Stop Jupyter:
+
+```bash
+docker compose stop jupyter
+```
+
+Remove containers:
 
 ```bash
 docker compose down
 ```
 
-Stop the stack and remove named volumes:
-
-```bash
-docker compose down -v
-```
-
 Remove and rebuild from scratch:
 
 ```bash
-docker compose down -v
+docker compose down
 docker compose --profile training build --no-cache
-docker compose up -d
+docker compose up -d jupyter
 ```
 
 ## Notes

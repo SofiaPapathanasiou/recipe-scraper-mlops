@@ -37,7 +37,7 @@ WORKDIR /app
 
 # Install Python dependencies (cached independently of source changes)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --group dev
+RUN uv sync --group dev
 
 RUN useradd -m -u 1000 trainer
 
@@ -56,8 +56,7 @@ ENV PYTHONUNBUFFERED=1 \
     HF_DATASETS_CACHE=/tmp/huggingface/datasets \
     TRANSFORMERS_CACHE=/tmp/huggingface/hub \
     MPLCONFIGDIR=/tmp/matplotlib \
-    MLFLOW_TRACKING_URI=http://mlflow:5000 \
-    MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    MLFLOW_TRACKING_URI=http://129.114.26.23:8000/
 
 # Create expected dirs (helps when volumes aren't mounted yet)
 RUN mkdir -p /opt/venv /tmp/.cache /tmp/huggingface/hub /tmp/huggingface/datasets /tmp/matplotlib \
