@@ -439,7 +439,8 @@ def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 def filter_mlflow_run_params(cfg: dict[str, Any]) -> dict[str, Any]:
     filtered_cfg = copy.deepcopy(cfg)
     filtered_cfg.pop("optuna", None)
-    return flatten_dict(filtered_cfg)
+    flat_cfg = flatten_dict(filtered_cfg)
+    return {key: flat_cfg[key] for key in MLFLOW_RUN_PARAM_ALLOWLIST if key in flat_cfg}
 
 
 def sanitize_mlflow_value(value: Any) -> Any:
@@ -456,6 +457,34 @@ def sanitize_mlflow_params(params: dict[str, Any]) -> dict[str, Any]:
 
 LOG_DELIMITER = "=" * 88
 LOG_SUBDELIMITER = "-" * 88
+
+MLFLOW_RUN_PARAM_ALLOWLIST = [
+    "model.name",
+    "tokenization.max_input_length",
+    "tokenization.max_target_length",
+    "training.learning_rate",
+    "training.weight_decay",
+    "training.num_epochs",
+    "training.per_device_train_batch_size",
+    "training.per_device_eval_batch_size",
+    "training.gradient_accumulation_steps",
+    "training.warmup_ratio",
+    "training.seed",
+    "evaluation.metric_for_best_model",
+]
+
+MLFLOW_CONTEXT_TAG_ALLOWLIST = {
+    "study_name",
+    "trial_number",
+}
+
+
+def filter_mlflow_context_tags(tags: dict[str, Any]) -> dict[str, str]:
+    return {
+        key: str(value)
+        for key, value in tags.items()
+        if key in MLFLOW_CONTEXT_TAG_ALLOWLIST and value is not None
+    }
 
 
 def format_summary_value(value: Any) -> str:
@@ -510,9 +539,21 @@ def log_temp_artifact(content: str, filename: str, artifact_path: str | None = N
             mlflow.log_artifact(str(artifact_file), artifact_path=artifact_path)
 
 
+def sanitize_artifact_value(value: Any) -> Any:
+    if value is None:
+        return value
+    if type(value) in {str, int, float, bool}:
+        return value
+    if isinstance(value, dict):
+        return {str(key): sanitize_artifact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [sanitize_artifact_value(item) for item in value]
+    return str(value)
+
+
 def log_yaml_artifact(data: dict[str, Any], filename: str, artifact_path: str | None = None) -> None:
     log_temp_artifact(
-        yaml.safe_dump(data, sort_keys=False, allow_unicode=False),
+        yaml.safe_dump(sanitize_artifact_value(data), sort_keys=False, allow_unicode=False),
         filename=filename,
         artifact_path=artifact_path,
     )
@@ -520,7 +561,7 @@ def log_yaml_artifact(data: dict[str, Any], filename: str, artifact_path: str | 
 
 def log_json_artifact(data: Any, filename: str, artifact_path: str | None = None) -> None:
     log_temp_artifact(
-        json.dumps(data, indent=2, sort_keys=True),
+        json.dumps(sanitize_artifact_value(data), indent=2, sort_keys=True),
         filename=filename,
         artifact_path=artifact_path,
     )
@@ -537,6 +578,21 @@ def log_optuna_search_space_artifacts(cfg: dict[str, Any], experiment_name: str)
 
     filename = f"{sanitize_study_name(experiment_name)}.yaml"
     log_yaml_artifact(search_space, filename, artifact_path="Optuna")
+
+
+def write_optuna_search_space_file(cfg: dict[str, Any], experiment_name: str) -> Path | None:
+    optuna_cfg = cfg.get("optuna")
+    if not isinstance(optuna_cfg, dict):
+        return None
+
+    search_space = optuna_cfg.get("search_space")
+    if not isinstance(search_space, dict) or not search_space:
+        return None
+
+    checkpoint_root = Path(cfg["checkpointing"]["checkpoint_dir"])
+    destination = checkpoint_root / "Optuna" / f"{sanitize_study_name(experiment_name)}.yaml"
+    write_yaml_file(destination, search_space)
+    return destination
 
 
 def write_yaml_file(path: Path, data: dict[str, Any]) -> None:
@@ -700,13 +756,7 @@ def mark_mlflow_run_pruned(
 ) -> None:
     if mlflow.active_run() is None:
         return
-    mlflow.set_tags(
-        {
-            "status": "pruned",
-            "objective_metric_name": objective_metric_name,
-            "objective_direction": objective_direction,
-        }
-    )
+    mlflow.set_tag("status", "pruned")
     if current_metric is not None:
         mlflow.log_metric("objective_value", current_metric, step=global_step)
     mlflow.log_metric("pruned_epoch", epoch, step=global_step)
@@ -1418,10 +1468,10 @@ def log_environment_info() -> dict[str, str]:
         "env.cpu_count": str(psutil.cpu_count(logical=True)),
         "env.ram_total_gb": f"{psutil.virtual_memory().total / 1e9:.1f}",
         "env.cuda_version": str(torch.version.cuda or "none"),
-        "env.torch_version": torch.__version__,
-        "env.transformers_version": transformers.__version__,
-        "env.accelerate_version": accelerate_pkg.__version__,
-        "env.mlflow_version": mlflow.__version__,
+        "env.torch_version": str(torch.__version__),
+        "env.transformers_version": str(transformers.__version__),
+        "env.accelerate_version": str(accelerate_pkg.__version__),
+        "env.mlflow_version": str(mlflow.__version__),
         "env.git_commit_hash": git_commit_hash(),
     }
 
@@ -1453,6 +1503,56 @@ def log_environment_info() -> dict[str, str]:
     info["env.gpu_names"] = ", ".join(gpu_names) if gpu_names else "none"
     info["env.gpu_total_memory_gb"] = ", ".join(gpu_memories) if gpu_memories else "none"
     return info
+
+
+def build_mlflow_run_params(
+    cfg: dict[str, Any],
+    train_dataset: Dataset,
+    val_dataset: Dataset,
+    accelerator: Accelerator,
+    mixed_precision: str,
+    total_steps: int,
+    warmup_steps: int,
+    trainable_params: int,
+) -> dict[str, Any]:
+    params = filter_mlflow_run_params(cfg)
+    params.update(
+        {
+            "accelerate.mixed_precision": mixed_precision,
+            "effective_batch_size": (
+                cfg["training"]["per_device_train_batch_size"]
+                * cfg["training"]["gradient_accumulation_steps"]
+                * accelerator.num_processes
+            ),
+            "total_optimizer_steps": total_steps,
+            "warmup_steps": warmup_steps,
+            "trainable_params": trainable_params,
+            "num_train_examples": len(train_dataset),
+            "num_val_examples": len(val_dataset),
+        }
+    )
+    return params
+
+
+def build_mlflow_run_tags(
+    cfg: dict[str, Any],
+    context: TrainingContext,
+    status: str,
+    environment_info: dict[str, str] | None = None,
+) -> dict[str, str]:
+    tags: dict[str, str] = {
+        "mode": context.mode,
+        "status": status,
+        "model_name": str(cfg["model"]["name"]),
+        "data_source": str(cfg["data"]["source"]),
+    }
+    if environment_info is not None:
+        git_commit = environment_info.get("env.git_commit_hash")
+        if git_commit:
+            tags["git_commit_hash"] = git_commit
+    if context.mlflow_tags:
+        tags.update(filter_mlflow_context_tags(context.mlflow_tags))
+    return tags
 
 
 def log_model_summary(model: torch.nn.Module) -> None:
@@ -1521,22 +1621,16 @@ def maybe_start_mlflow_run(
     )
     mlflow.set_tag("mlflow.runName", format_mlflow_run_name(run.info.run_id))
 
-    flat_params = filter_mlflow_run_params(cfg)
-    flat_params.update(
-        {
-            "accelerate.mixed_precision": mixed_precision,
-            "effective_batch_size": (
-                cfg["training"]["per_device_train_batch_size"]
-                * cfg["training"]["gradient_accumulation_steps"]
-                * accelerator.num_processes
-            ),
-            "total_optimizer_steps": total_steps,
-            "warmup_steps": warmup_steps,
-            "trainable_params": trainable_params,
-            "data_source": cfg["data"]["source"],
-            "num_train_examples": len(train_dataset),
-            "num_val_examples": len(val_dataset),
-        }
+    environment_info = log_environment_info()
+    flat_params = build_mlflow_run_params(
+        cfg,
+        train_dataset,
+        val_dataset,
+        accelerator,
+        mixed_precision,
+        total_steps,
+        warmup_steps,
+        trainable_params,
     )
     mlflow.log_params(sanitize_mlflow_params(flat_params))
     if context.trial_params:
@@ -1545,10 +1639,9 @@ def maybe_start_mlflow_run(
                 {f"trial_param.{key}": value for key, value in context.trial_params.items()}
             )
         )
-    mlflow.set_tags(log_environment_info())
-    if context.mlflow_tags:
-        mlflow.set_tags({key: str(value) for key, value in context.mlflow_tags.items()})
+    mlflow.set_tags(build_mlflow_run_tags(cfg, context, status="running", environment_info=environment_info))
     log_model_summary(accelerator.unwrap_model(model))
+    log_yaml_artifact(environment_info, "environment.yaml", artifact_path="runtime")
     log_yaml_artifact(cfg, "resolved_config.yaml", artifact_path="config")
     if context.mode == "tune":
         log_optuna_search_space_artifacts(cfg, experiment_name)
@@ -1865,7 +1958,6 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         best_metric,
                         step=global_step,
                     )
-                    mlflow.set_tag("best_checkpoint", best_checkpoint)
                     debug_log(
                         accelerator,
                         f"New best checkpoint at epoch {epoch}: {best_checkpoint} "
@@ -1889,28 +1981,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 config_dict,
                 best_checkpoint,
             )
-            run_tags = {
-                "mode": context.mode,
-                "model_name": config_dict["model"]["name"],
-                "task": "recipe-correction",
-                "data_source": config_dict["data"]["source"],
-                "status": "complete",
-                "best_checkpoint": best_checkpoint or "none",
-                "objective_metric_name": objective_metric_name,
-                "objective_direction": objective_direction,
-                "best_model_storage": "mlflow-artifacts+mlflow-model-registry",
-            }
             if logged_checkpoint_info is not None:
-                run_tags.update(
-                    {
-                        "best_checkpoint_artifact_path": logged_checkpoint_info["artifact_path"],
-                    }
-                )
-                mlflow.log_params(
-                    {
-                        "best_checkpoint_artifact_path": logged_checkpoint_info["artifact_path"],
-                    }
-                )
                 log_json_artifact(
                     {
                         "run_id": run_id,
@@ -1927,20 +1998,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     "best_model_pointer.json",
                     artifact_path="model_registry",
                 )
-            if mlflow_registry_info is not None:
-                run_tags.update(
-                    {
-                        "mlflow_registered_model_name": mlflow_registry_info["registered_model_name"],
-                        "mlflow_best_model_uri": mlflow_registry_info["model_uri"],
-                    }
-                )
-                mlflow.log_params(
-                    {
-                        "mlflow_registered_model_name": mlflow_registry_info["registered_model_name"],
-                        "mlflow_best_model_uri": mlflow_registry_info["model_uri"],
-                    }
-                )
-            mlflow.set_tags(run_tags)
+            mlflow.set_tags(build_mlflow_run_tags(config_dict, context, status="complete"))
             emit_console_summary(
                 accelerator.print,
                 "RUN SUMMARY",
@@ -2038,6 +2096,7 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
 
     experiment_name = get_mlflow_experiment_name(cfg, "tune")
     study_name = get_optuna_study_name(cfg)
+    search_space_path = write_optuna_search_space_file(cfg, experiment_name)
     mlflow.set_tracking_uri(resolve_mlflow_tracking_uri(cfg))
     experiment_id = ensure_mlflow_experiment(cfg, experiment_name)
     mlflow.set_experiment(experiment_id=experiment_id)
@@ -2053,6 +2112,8 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
     study.set_user_attr("status", "running")
     study.set_user_attr("mlflow_experiment_name", experiment_name)
     study.set_user_attr("study_output_dir", str(study_output_dir))
+    if search_space_path is not None:
+        study.set_user_attr("optuna_search_space_path", str(search_space_path))
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_params = sample_trial_params(trial, optuna_cfg["search_space"])
@@ -2128,6 +2189,7 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
                 "completed_trials": trial_counts["complete"],
                 "failed_trials": trial_counts["failed"],
                 "pruned_trials": trial_counts["pruned"],
+                "optuna_search_space_path": str(search_space_path) if search_space_path is not None else "none",
                 "trial_summary_path": str(summary_path),
             },
         )
@@ -2167,6 +2229,7 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
                 "best_run_id": best_trial.user_attrs.get("run_id", "unknown"),
                 "best_checkpoint": best_trial.user_attrs.get("best_checkpoint", "none"),
                 "best_config_path": str(best_config_path),
+                "optuna_search_space_path": str(search_space_path) if search_space_path is not None else "none",
                 "trial_summary_path": str(summary_path),
                 "best_params": best_trial.params,
                 "final_metrics": best_trial.user_attrs.get("final_metrics", {}),
@@ -2177,6 +2240,8 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
         study.set_user_attr("best_trial_number", int(best_trial.number))
         study.set_user_attr("best_run_id", str(best_trial.user_attrs.get("run_id", "unknown")))
         study.set_user_attr("best_config_path", str(best_config_path))
+        if search_space_path is not None:
+            study.set_user_attr("optuna_search_space_path", str(search_space_path))
         study.set_user_attr("status", "complete")
         return study
     except Exception as error:
