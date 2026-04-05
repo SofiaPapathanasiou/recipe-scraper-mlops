@@ -34,7 +34,7 @@ WORKDIR /workspace
 
 # Install Python dependencies (cached independently of source changes)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --extra torch-gpu
+RUN uv sync --extra torch-gpu
 
 ARG BASE_IMAGE=python:3.11-slim
 FROM ${BASE_IMAGE} AS runtime
@@ -75,8 +75,7 @@ ENV PYTHONUNBUFFERED=1 \
     HF_DATASETS_CACHE=/tmp/huggingface/datasets \
     TRANSFORMERS_CACHE=/tmp/huggingface/hub \
     MPLCONFIGDIR=/tmp/matplotlib \
-    MLFLOW_TRACKING_URI=http://mlflow:5000 \
-    MLFLOW_S3_ENDPOINT_URL=http://minio:9000 \
+    MLFLOW_TRACKING_URI=http://129.114.26.23:8000/ \
     TRAIN_SCRIPT=train.py \
     TRAIN_CONFIG=config.yaml \
     TRAIN_MODE=train \
@@ -91,7 +90,7 @@ USER trainer
 
 # Health check verifies the Python environment and key imports
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import accelerate, boto3, mlflow, torch, transformers, yaml; print('OK')" || exit 1
+    CMD python -c "import accelerate, mlflow, torch, transformers, yaml; print('OK')" || exit 1
 
 # Default entrypoint for training runs
 ENTRYPOINT ["sh", "/app/scripts/run_training.sh"]

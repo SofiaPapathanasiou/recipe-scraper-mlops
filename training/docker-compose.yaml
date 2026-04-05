@@ -1,194 +1,10 @@
-# Recipe correction MLOps stack
-# Services: MinIO, PostgreSQL, MLflow, Redis, Redis Insight, Jupyter, Training
-
-x-mlops-network: &mlops-network
-  networks:
-    - mlops-net
-
-x-minio-credentials: &minio-credentials
-  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+# Recipe correction training stack
+# Services: Jupyter, Training
 
 x-runtime-env: &runtime-env
-  MLFLOW_TRACKING_URI: http://mlflow:5000
-  MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-  MINIO_ENDPOINT: minio:9000
-  MINIO_BUCKET_DATASETS: ${MINIO_BUCKET_DATASETS:-recipe-datasets}
-  MINIO_BUCKET_MODELS: ${MINIO_BUCKET_MODELS:-model-registry}
-  REDIS_HOST: ${REDIS_HOST:-redis}
-  REDIS_PORT: ${REDIS_PORT:-6379}
-  <<: *minio-credentials
-
-x-runtime-depends-on: &runtime-depends-on
-  mlflow:
-    condition: service_healthy
-  minio:
-    condition: service_healthy
-  minio-init:
-    condition: service_completed_successfully
-  redis:
-    condition: service_healthy
-
-networks:
-  mlops-net:
-    driver: bridge
-
-volumes:
-  minio-data:
-  postgres-data:
-  redis-data:
+  MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://129.114.26.23:8000/}
 
 services:
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    <<: *mlops-network
-
-  minio-init:
-    image: minio/mc:latest
-    container_name: minio-init
-    restart: "no"
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        echo "Waiting for MinIO..."
-        until mc alias set local http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin123}"; do
-          sleep 2
-        done
-        echo "Creating buckets..."
-        mc mb --ignore-existing local/mlflow-artifacts
-        mc mb --ignore-existing local/recipe-datasets
-        mc mb --ignore-existing local/model-registry
-        mc mb --ignore-existing local/production-feedback
-        echo "MinIO setup complete."
-    <<: *mlops-network
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-mlflow}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
-      POSTGRES_DB: ${POSTGRES_DB:-mlflow}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlflow} -d ${POSTGRES_DB:-mlflow}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    <<: *mlops-network
-
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
-    container_name: mlflow
-    restart: unless-stopped
-    init: true
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      # Do not set MLFLOW_SERVER_ALLOWED_HOSTS here: MLflow replaces its full defaults (localhost:*, IPv6, private IP
-      # patterns) with whatever you pass. The command below merges upstream defaults + Docker service name + extras.
-      MLFLOW_EXTRA_ALLOWED_HOSTS: ${MLFLOW_EXTRA_ALLOWED_HOSTS:-}
-      # Optional full override (e.g. * for dev). If set, startup skips merging and uses this value as-is.
-      MLFLOW_SERVER_ALLOWED_HOSTS: ${MLFLOW_SERVER_ALLOWED_HOSTS:-}
-      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: ${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-}
-      MLFLOW_HTTP_GATEWAY_ALLOW_HOSTS: "*"
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_S3_FORCE_PATH_STYLE: "true"
-      POSTGRES_USER: ${POSTGRES_USER:-mlflow}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow123}
-      POSTGRES_DB: ${POSTGRES_DB:-mlflow}
-      GUNICORN_CMD_ARGS: "--proxy-allow-from * --forwarded-allow-ips *"
-      <<: *minio-credentials
-    command:
-      - bash
-      - -lc
-      - |
-        pip install psycopg2-binary boto3 -q && \
-        export MLFLOW_SERVER_ALLOWED_HOSTS="$(python -c "$(printf '%s\n' \
-          'import os' \
-          'from mlflow.server.security_utils import get_default_allowed_hosts' \
-          'r = (os.environ.get("MLFLOW_SERVER_ALLOWED_HOSTS") or "").strip()' \
-          'if r:' \
-          '    print(r)' \
-          'else:' \
-          '    h = list(dict.fromkeys(get_default_allowed_hosts() + ["mlflow", "mlflow:5000"]))' \
-          '    for p in (os.environ.get("MLFLOW_EXTRA_ALLOWED_HOSTS") or "").split(","):' \
-          '        p = p.strip()' \
-          '        if p:' \
-          '            h.append(p)' \
-          '    print(",".join(h))')")" && \
-        exec mlflow server \
-          --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
-          --default-artifact-root "s3://mlflow-artifacts" \
-          --host 0.0.0.0 \
-          --port 5000
-    ports:
-      - "5000:5000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000')"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
-    <<: *mlops-network
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    command: redis-server /usr/local/etc/redis/redis.conf
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    <<: *mlops-network
-
-  redis-insight:
-    image: redis/redisinsight:latest
-    container_name: redis-insight
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "5540:5540"
-    <<: *mlops-network
-
   jupyter:
     build:
       context: .
@@ -196,7 +12,6 @@ services:
     container_name: jupyter
     restart: unless-stopped
     init: true
-    depends_on: *runtime-depends-on
     environment:
       JUPYTER_ENABLE_LAB: "yes"
       JUPYTER_LAB_EXTENSION_MANAGER: "none"
@@ -232,7 +47,6 @@ services:
       - .:/app
       - ../.git:/app/.git:ro
     gpus: all
-    <<: *mlops-network
 
   training:
     build:
@@ -242,7 +56,6 @@ services:
     profiles:
       - training
     restart: "no"
-    depends_on: *runtime-depends-on
     environment:
       NUM_PROCESSES: ${NUM_PROCESSES:-2}
       <<: *runtime-env
@@ -252,4 +65,3 @@ services:
       - ./data:/app/data
       - ./checkpoints:/app/checkpoints
     gpus: all
-    <<: *mlops-network
