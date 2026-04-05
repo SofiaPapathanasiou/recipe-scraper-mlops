@@ -9,7 +9,8 @@
 # Run:     docker compose up jupyter
 # =============================================================================
 
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime AS dev
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE} AS builder
 
 LABEL maintainer="mlops-class"
 LABEL description="T5 recipe correction dev container (interactive)"
@@ -28,34 +29,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv (same mechanism as training Dockerfile)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+ENV VIRTUAL_ENV="/opt/venv"
+ENV UV_PROJECT_ENVIRONMENT="/opt/venv"
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 
 # Install Python dependencies (cached independently of source changes)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
+RUN uv sync --group dev
 
-ENV VIRTUAL_ENV="/app/.venv"
-ENV PATH="/app/.venv/bin:$PATH"
+RUN useradd -m -u 1000 trainer
 
 # Default workspace layout (compose bind-mounts will overlay these)
-WORKDIR /app/training
+WORKDIR /app
+
+COPY --chown=trainer:trainer pyproject.toml uv.lock ./
 
 # Keep defaults consistent with runtime image
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TOKENIZERS_PARALLELISM=false \
-    HF_HOME=/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface/hub \
-    MLFLOW_TRACKING_URI=http://mlflow:5000 \
-    MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    XDG_CACHE_HOME=/tmp/.cache \
+    HF_HOME=/tmp/huggingface \
+    HUGGINGFACE_HUB_CACHE=/tmp/huggingface/hub \
+    HF_DATASETS_CACHE=/tmp/huggingface/datasets \
+    TRANSFORMERS_CACHE=/tmp/huggingface/hub \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    MLFLOW_TRACKING_URI=http://129.114.26.23:8000/
 
 # Create expected dirs (helps when volumes aren't mounted yet)
-RUN mkdir -p /app/.cache/huggingface /app/checkpoints /app/data/raw /app/data/processed /app/notebooks /app/training
-
-# Non-root user (matches typical host UID for clean bind-mount permissions)
-RUN useradd -m -u 1000 trainer \
-  && chown -R trainer:trainer /app
-USER trainer
+RUN mkdir -p /opt/venv /tmp/.cache /tmp/huggingface/hub /tmp/huggingface/datasets /tmp/matplotlib \
+    /app/checkpoints /app/data/raw /app/data/processed /app/notebooks
 
 # Dev default: shell (compose overrides command to Jupyter)
 CMD ["bash"]
