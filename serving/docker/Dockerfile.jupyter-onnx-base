@@ -1,0 +1,9 @@
+FROM quay.io/jupyter/pytorch-notebook:pytorch-2.5.1
+
+USER ${NB_UID}
+RUN pip install --pre --no-cache-dir \
+    'onnx==1.18.0' \
+    'onnxruntime' \
+    'neural-compressor==3.6' && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
