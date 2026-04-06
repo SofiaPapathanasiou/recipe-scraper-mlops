@@ -49,43 +49,65 @@
 #     restart: "no"
 
 
-volumes:
-  recipe-nlg:
-    external: true
+# volumes:
+#   recipe-nlg:
+#     external: true
+
+# services:
+#   init-data:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile.swift
+#     volumes:
+#       - recipe-nlg:/data
+#       - ~/app-cred-proj22-swift-openrc.sh:/credentials/openrc.sh:ro
+#     command:
+#       - bash
+#       - -lc
+#       - |
+#         set -e
+
+#         source /credentials/openrc.sh
+
+#         mkdir -p /data/training/cleaner/v_20260401
+
+#         if [ ! -f /data/training/cleaner/v_20260401/train.jsonl ]; then
+#           echo "Downloading train.jsonl..."
+#           swift download proj22-data training/cleaner/v_20260401/train.jsonl \
+#             -o /data/training/cleaner/v_20260401/train.jsonl
+#         else
+#           echo "train.jsonl already exists, skipping"
+#         fi
+
+#         if [ ! -f /data/training/cleaner/v_20260401/eval.jsonl ]; then
+#           echo "Downloading eval.jsonl..."
+#           swift download proj22-data training/cleaner/v_20260401/eval.jsonl \
+#             -o /data/training/cleaner/v_20260401/eval.jsonl
+#         else
+#           echo "eval.jsonl already exists, skipping"
+#         fi
+
+#         echo "Download complete."
+#     restart: "no"
+
 
 services:
   init-data:
-    build:
-      context: .
-      dockerfile: Dockerfile.swift
+    image: python:3.11
     volumes:
       - recipe-nlg:/data
-      - ~/app-cred-proj22-swift-openrc.sh:/credentials/openrc.sh:ro
+      - ./:/src
     command:
       - bash
       - -lc
       - |
         set -e
-
-        source /credentials/openrc.sh
-
-        mkdir -p /data/training/cleaner/v_20260401
-
-        if [ ! -f /data/training/cleaner/v_20260401/train.jsonl ]; then
-          echo "Downloading train.jsonl..."
-          swift download proj22-data training/cleaner/v_20260401/train.jsonl \
-            -o /data/training/cleaner/v_20260401/train.jsonl
-        else
-          echo "train.jsonl already exists, skipping"
-        fi
-
-        if [ ! -f /data/training/cleaner/v_20260401/eval.jsonl ]; then
-          echo "Downloading eval.jsonl..."
-          swift download proj22-data training/cleaner/v_20260401/eval.jsonl \
-            -o /data/training/cleaner/v_20260401/eval.jsonl
-        else
-          echo "eval.jsonl already exists, skipping"
-        fi
-
-        echo "Download complete."
+        apt-get update
+        apt-get install -y unzip
+        unzip -j /src/eval.jsonl.zip -d /data
+        ls -l /data
     restart: "no"
+
+volumes:
+  recipe-nlg:
+    external: true
