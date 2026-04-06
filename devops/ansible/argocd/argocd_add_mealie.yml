@@ -1,14 +1,12 @@
 ---
-- name: Deploy MLflow platform via ArgoCD & Helm with secret handling
+- name: Deploy Mealie via ArgoCD & Helm
   hosts: node1
   become: yes
   vars:
     argocd_username: "admin"
     repo_path: "https://github.com/SofiaPapathanasiou/recipe-scraper-mlops.git"
-    app_name: "recipe-scraper-platform"
-    app_path: "devops/k8s/platform"
-    postgres_username: "user"
-    postgres_db: "mlflowdb"
+    app_name: "recipe-scraper-mealie"
+    app_path: "devops/k8s/mealie"
 
   tasks:
     - name: Get ArgoCD admin password from Kubernetes secret
@@ -38,36 +36,15 @@
       set_fact:
         external_ip: "{{ ansible_all_ipv4_addresses | select('match', '^10\\.56\\..*') | list | first }}"
 
-    - name: Ensure recipe-scraper-platform namespace exists
-      command: kubectl get namespace recipe-scraper-platform
+    - name: Ensure recipe-scraper-mealie namespace exists
+      command: kubectl get namespace recipe-scraper-mealie
       register: ns_check
       failed_when: false
       changed_when: false
 
-    - name: Create recipe-scraper-platform namespace if missing
+    - name: Create recipe-scraper-mealie namespace if missing
       when: ns_check.rc != 0
-      command: kubectl create namespace recipe-scraper-platform
-
-    - name: Check if Postgres secret already exists
-      command: kubectl get secret postgres-credentials -n recipe-scraper-platform
-      register: postgres_secret_check
-      failed_when: false
-      changed_when: false
-
-    - name: Generate Postgres password
-      when: postgres_secret_check.rc != 0
-      set_fact:
-        postgres_password: "{{ lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}"
-
-    - name: Create Postgres credentials secret
-      when: postgres_secret_check.rc != 0
-      command: >
-        kubectl create secret generic postgres-credentials
-        --namespace recipe-scraper-platform
-        --from-literal=username={{ postgres_username }}
-        --from-literal=password={{ postgres_password }}
-        --from-literal=dbname={{ postgres_db }}
-      register: postgres_secret_create
+      command: kubectl create namespace recipe-scraper-mealie
 
     - name: Check if ArgoCD application exists
       command: >
@@ -84,7 +61,7 @@
         --path {{ app_path }} \
         --dest-server https://kubernetes.default.svc \
         --dest-namespace "" \
-        --helm-set-string mlflow.externalIP={{ external_ip }} \
+        --helm-set-string service.externalIP={{ external_ip }} \
         --port-forward --port-forward-namespace=argocd \
         --sync-policy automated --self-heal
       register: app_create
@@ -94,6 +71,6 @@
       command: >
         argocd app set {{ app_name }} \
         --dest-namespace "" \
-        --helm-set-string mlflow.externalIP={{ external_ip }} \
+        --helm-set-string service.externalIP={{ external_ip }} \
         --port-forward --port-forward-namespace=argocd
       register: app_update

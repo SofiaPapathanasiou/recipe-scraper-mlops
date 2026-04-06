@@ -1,0 +1,4 @@
+apiVersion: v2
+name: recipe-scraper-mealie
+version: 1.0.0
+description: Mealie Recipe Manager
