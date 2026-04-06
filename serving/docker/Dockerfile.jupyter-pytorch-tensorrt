@@ -1,0 +1,47 @@
+FROM quay.io/jupyter/base-notebook:latest
+
+USER root
+
+# Useful basics
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+USER ${NB_UID}
+
+# Keep pip tooling fresh
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install a clean, matching PyTorch + Torch-TensorRT stack.
+# PyTorch 2.11 defaults to CUDA 13 wheels on Linux.
+RUN python -m pip install --no-cache-dir \
+    torch==2.11.0 \
+    torchvision \
+    torchaudio \
+    torch-tensorrt==2.11.0 \
+    transformers \
+    sentencepiece \
+    pandas \
+    tqdm \
+    pytorch-ignite
+
+# Make NVIDIA CUDA/TensorRT wheel-provided libraries discoverable at runtime.
+ENV LD_LIBRARY_PATH="/opt/conda/lib/python3.12/site-packages/nvidia/cublas/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cuda_cupti/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cudnn/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cufft/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/curand/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cusolver/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cusparse/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/cusparselt/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/nccl/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/nvjitlink/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/nvshmem/lib:\
+/opt/conda/lib/python3.12/site-packages/nvidia/nvtx/lib:\
+/opt/conda/lib/python3.12/site-packages/tensorrt_libs:${LD_LIBRARY_PATH}"
+
+RUN fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
