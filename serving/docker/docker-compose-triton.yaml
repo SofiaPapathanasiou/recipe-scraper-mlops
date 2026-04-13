@@ -175,6 +175,105 @@
 #   recipe-nlg:
 #   triton-models:
 
+# name: recipe_triton
+
+# services:
+#   init-data:
+#     image: python:3.11
+#     volumes:
+#       - recipe-nlg:/data
+#       - ./:/src
+#     command:
+#       - bash
+#       - -lc
+#       - |
+#         set -e
+#         apt-get update
+#         apt-get install -y unzip
+#         unzip -j /src/eval.jsonl.zip -d /data
+#         ls -l /data
+#     restart: "no"
+
+#   init-models:
+#     image: python:3.11
+#     volumes:
+#       - triton-models:/models
+#       - ~/app-cred-proj22-swift-openrc.sh:/credentials/openrc.sh:ro
+#       - ./models:/seed-models:ro
+#     command:
+#       - bash
+#       - -lc
+#       - |
+#         set -e
+
+#         apt-get update
+#         apt-get install -y python3-pip
+#         pip install python-swiftclient python-keystoneclient
+
+#         source /credentials/openrc.sh
+
+#         MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
+
+#         mkdir -p /models/recipe_model/1
+
+#         cp /seed-models/recipe_model/config.pbtxt /models/recipe_model/config.pbtxt
+#         cp /seed-models/recipe_model/1/model.py /models/recipe_model/1/model.py
+
+#         cd /models/recipe_model/1
+#         swift download proj22-mlflow-artifacts --prefix "$${MODEL_PREFIX}/"
+
+#         if [ -d "/models/recipe_model/1/$${MODEL_PREFIX}" ]; then
+#           cp -r "/models/recipe_model/1/$${MODEL_PREFIX}/"* /models/recipe_model/1/
+#           rm -rf /models/recipe_model/1/1
+#         fi
+
+#         echo "Downloaded model files:"
+#         find /models -maxdepth 8 -type f | sort
+#     restart: "no"
+
+#   triton:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile.triton
+#     container_name: triton_server
+#     deploy:
+#       resources:
+#         reservations:
+#           devices:
+#             - driver: nvidia
+#               count: all
+#               capabilities: [gpu]
+#     ports:
+#       - "8000:8000"
+#       - "8001:8001"
+#       - "8002:8002"
+#     volumes:
+#       - recipe-nlg:/data
+#       - triton-models:/models
+#     depends_on:
+#       init-data:
+#         condition: service_completed_successfully
+#       init-models:
+#         condition: service_completed_successfully
+
+#   jupyter:
+#     image: quay.io/jupyter/minimal-notebook:latest
+#     container_name: jupyter
+#     ports:
+#       - "8888:8888"
+#     volumes:
+#       - ~/recipe-scraper-mlops/serving/workspace:/home/jovyan/work
+#       - recipe-nlg:/data
+#       - triton-models:/models
+#     command: >
+#       bash -c "python3 -m pip install bash_kernel 'tritonclient[all]' &&
+#                python3 -m bash_kernel.install --sys-prefix &&
+#                start-notebook.sh"
+
+# volumes:
+#   recipe-nlg:
+#   triton-models:
+
 name: recipe_triton
 
 services:
@@ -190,7 +289,12 @@ services:
         set -e
         apt-get update
         apt-get install -y unzip
-        unzip -j /src/eval.jsonl.zip -d /data
+        if [ ! -f /data/eval.jsonl ]; then
+          unzip -j /src/eval.jsonl.zip -d /data
+        else
+          echo "eval.jsonl already exists, skipping"
+         fi
+
         ls -l /data
     restart: "no"
 
@@ -198,38 +302,23 @@ services:
     image: python:3.11
     volumes:
       - triton-models:/models
-      - ~/app-cred-proj22-swift-openrc.sh:/credentials/openrc.sh:ro
-      - ./models:/seed-models:ro
+      - ./:/src
     command:
       - bash
       - -lc
       - |
-        set -e
+        set -ex
 
-        apt-get update
-        apt-get install -y python3-pip
-        pip install python-swiftclient python-keystoneclient
+        rm -rf /models/recipe_model
+        mkdir -p /models
 
-        source /credentials/openrc.sh
+        cp -r /src/models/recipe_model /models/
 
-        MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
-
-        mkdir -p /models/recipe_model/1
-
-        cp /seed-models/recipe_model/config.pbtxt /models/recipe_model/config.pbtxt
-        cp /seed-models/recipe_model/1/model.py /models/recipe_model/1/model.py
-
-        cd /models/recipe_model/1
-        swift download proj22-mlflow-artifacts --prefix "${MODEL_PREFIX}/"
-
-        if [ -d "/models/recipe_model/1/${MODEL_PREFIX}" ]; then
-          cp -r "/models/recipe_model/1/${MODEL_PREFIX}/"* /models/recipe_model/1/
-          rm -rf /models/recipe_model/1/1
-        fi
-
-        echo "Downloaded model files:"
+        echo "Copied model files:"
         find /models -maxdepth 8 -type f | sort
     restart: "no"
+
+
 
   triton:
     build:
