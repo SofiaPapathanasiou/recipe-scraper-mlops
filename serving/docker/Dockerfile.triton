@@ -6,13 +6,13 @@ FROM nvcr.io/nvidia/tritonserver:24.10-py3
 RUN pip install --no-cache-dir \
     pillow \
     torch==2.4.0 torchvision==0.19.0 \
-    onnxruntime-gpu
+    onnxruntime-gpu \
+    transformers \
+    sentencepiece
 
 # Expose Triton ports
 EXPOSE 8000 8001 8002
 
-# Copy the model repository into the container
-COPY models /models
 
 # Start Triton server with the model repository
 CMD ["tritonserver", "--model-repository=/models"]
