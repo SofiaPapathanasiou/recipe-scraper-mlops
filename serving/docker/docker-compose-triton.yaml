@@ -323,7 +323,7 @@ services:
     volumes:
       - triton-models:/models
       - /home/cc/openrc:/credentials/openrc.sh:ro
-      - ./:/src
+      - ../:/src
     command:
       - bash
       - -lc
@@ -346,10 +346,10 @@ services:
         cp /src/models/recipe_model/1/model.py /models/recipe_model/1/model.py
 
         cd /models/recipe_model/1
-        swift download --ignore-checksum "$MODEL_CONTAINER" --prefix "${MODEL_PREFIX}/"
+        swift download --ignore-checksum "$$MODEL_CONTAINER" --prefix "$${MODEL_PREFIX}/"
 
-        if [ -d "${MODEL_PREFIX}" ]; then
-          cp -r "${MODEL_PREFIX}/"* .
+        if [ -d "$${MODEL_PREFIX}" ]; then
+          cp -r "$${MODEL_PREFIX}/"* .
           rm -rf 1
         fi
 
@@ -380,6 +380,27 @@ services:
         condition: service_completed_successfully
       init-models:
         condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - triton
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
 
   jupyter:
     image: quay.io/jupyter/minimal-notebook:latest
