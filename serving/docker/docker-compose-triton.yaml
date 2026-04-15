@@ -298,10 +298,31 @@ services:
         ls -l /data
     restart: "no"
 
+  # init-models:
+  #   image: python:3.11
+  #   volumes:
+  #     - triton-models:/models
+  #     - ./:/src
+  #   command:
+  #     - bash
+  #     - -lc
+  #     - |
+  #       set -ex
+
+  #       rm -rf /models/recipe_model
+  #       mkdir -p /models
+
+  #       cp -r /src/models/recipe_model /models/
+
+  #       echo "Copied model files:"
+  #       find /models -maxdepth 8 -type f | sort
+  #   restart: "no"
+
   init-models:
     image: python:3.11
     volumes:
       - triton-models:/models
+      - /home/cc/openrc:/credentials/openrc.sh:ro
       - ./:/src
     command:
       - bash
@@ -309,16 +330,31 @@ services:
       - |
         set -ex
 
+        apt-get update
+        apt-get install -y python3-pip
+        pip install --no-cache-dir python-swiftclient python-keystoneclient
+
+        source /credentials/openrc.sh
+
+        MODEL_CONTAINER="proj22-mlflow-artifacts"
+        MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
+
         rm -rf /models/recipe_model
-        mkdir -p /models
+        mkdir -p /models/recipe_model/1
 
-        cp -r /src/models/recipe_model /models/
+        cp /src/models/recipe_model/config.pbtxt /models/recipe_model/config.pbtxt
+        cp /src/models/recipe_model/1/model.py /models/recipe_model/1/model.py
 
-        echo "Copied model files:"
+        cd /models/recipe_model/1
+        swift download --ignore-checksum "$MODEL_CONTAINER" --prefix "${MODEL_PREFIX}/"
+
+        if [ -d "${MODEL_PREFIX}" ]; then
+          cp -r "${MODEL_PREFIX}/"* .
+          rm -rf 1
+        fi
+
         find /models -maxdepth 8 -type f | sort
     restart: "no"
-
-
 
   triton:
     build:
