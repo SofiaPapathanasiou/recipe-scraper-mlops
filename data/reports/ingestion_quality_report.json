@@ -1,0 +1,8 @@
+{
+  "total_rows": 137558,
+  "bad_json_rows": 0,
+  "empty_dirty_rows": 137558,
+  "empty_clean_rows": 137558,
+  "duplicate_pairs": 137557,
+  "status": "WARNING"
+}
