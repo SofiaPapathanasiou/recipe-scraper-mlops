@@ -1,0 +1,15 @@
+checks for recipe_imports:
+  - row_count > 0
+  - missing_count(raw_text) = 0
+  - missing_count(source_type) = 0
+
+checks for users:
+  - row_count > 0
+  - duplicate_count(username) = 0
+
+checks for recipes:
+  - row_count > 0
+  - missing_count(title) = 0
+
+checks for meal_plan_interactions:
+  - row_count > 0

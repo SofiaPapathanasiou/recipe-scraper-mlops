@@ -1,0 +1,7 @@
+data_source mealie_db:
+  type: postgres
+  host: localhost
+  port: 5432
+  username: mealie
+  password: mealie_password
+  database: mealie
