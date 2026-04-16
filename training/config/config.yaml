@@ -32,6 +32,7 @@ evaluation:
 checkpointing:
   checkpoint_dir: /app/checkpoints/recipe-correction
   load_best_model_at_end: true
+  save_intermediate_checkpoints: false
 
 huggingface:
   cache_dir: /app/checkpoints/huggingface-cache
@@ -45,6 +46,9 @@ model_registry:
   model_name: recipe-correction-t5
 
 data:
-  source: mock
+  source: jsonl
+  train_file: train.jsonl
+  eval_file: eval.jsonl
+  data_dir:
   mock_train_size: 200
   mock_val_size: 40

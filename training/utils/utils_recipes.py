@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -292,6 +294,15 @@ def build_mock_recipe_pairs() -> list[tuple[str, str]]:
 
 CORRUPTIONS = build_mock_recipe_pairs()
 
+
+def maybe_prepend_task_prefix(text: str, task_prefix: str) -> str:
+    if not task_prefix:
+        return text
+    if text.lstrip().startswith(task_prefix):
+        return text
+    return f"{task_prefix}{text}"
+
+
 def make_split(pairs: list[tuple[str, str]], target_size: int) -> list[tuple[str, str]]:
     pool = pairs * (target_size // len(pairs) + 1)
     generator = torch.Generator().manual_seed(0)
@@ -310,7 +321,7 @@ class RecipeTextDataset(Dataset):
         max_target_length: int,
     ) -> None:
         self.tokenizer = tokenizer
-        self.inputs = [task_prefix + corrupted for corrupted, _ in pairs]
+        self.inputs = [maybe_prepend_task_prefix(corrupted, task_prefix) for corrupted, _ in pairs]
         self.targets = [target for _, target in pairs]
         self.max_input_length = max_input_length
         self.max_target_length = max_target_length
@@ -361,12 +372,121 @@ class MockRecipeDataset(RecipeTextDataset):
         )
 
 
-def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Dataset]:
-    if cfg["data"]["source"] != "mock":
-        raise ValueError(
-            f"Unsupported data.source {cfg['data']['source']!r}; only 'mock' is supported in this setup."
+class JsonlRecipeDataset(Dataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        tokenizer: Any,
+        task_prefix: str,
+        max_input_length: int,
+        max_target_length: int,
+    ) -> None:
+        self.dataset_path = Path(dataset_path).expanduser()
+        if not self.dataset_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {self.dataset_path}")
+
+        self.tokenizer = tokenizer
+        self.task_prefix = task_prefix
+        self.max_input_length = max_input_length
+        self.max_target_length = max_target_length
+        self._offsets = self._index_file()
+        self._file_handle: Any = None
+
+    def _index_file(self) -> list[int]:
+        offsets: list[int] = []
+        with open(self.dataset_path, "rb") as handle:
+            while True:
+                offset = handle.tell()
+                line = handle.readline()
+                if not line:
+                    break
+                if line.strip():
+                    offsets.append(offset)
+        if not offsets:
+            raise ValueError(f"Dataset file is empty: {self.dataset_path}")
+        return offsets
+
+    def _get_file_handle(self) -> Any:
+        if self._file_handle is None or self._file_handle.closed:
+            self._file_handle = open(self.dataset_path, "r", encoding="utf-8")
+        return self._file_handle
+
+    def _load_record(self, index: int) -> tuple[str, str]:
+        handle = self._get_file_handle()
+        handle.seek(self._offsets[index])
+        raw_line = handle.readline()
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Invalid JSON in {self.dataset_path} at dataset index {index}: {error}"
+            ) from error
+
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected an object in {self.dataset_path} at dataset index {index}.")
+        if "input" not in payload or "target" not in payload:
+            raise ValueError(
+                f"Expected 'input' and 'target' keys in {self.dataset_path} at dataset index {index}."
+            )
+
+        input_text = payload["input"]
+        target_text = payload["target"]
+        if not isinstance(input_text, str) or not isinstance(target_text, str):
+            raise ValueError(
+                f"Expected string 'input' and 'target' values in {self.dataset_path} at dataset index {index}."
+            )
+        return maybe_prepend_task_prefix(input_text, self.task_prefix), target_text
+
+    def __len__(self) -> int:
+        return len(self._offsets)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        input_text, target_text = self._load_record(index)
+        model_inputs = self.tokenizer(
+            input_text,
+            max_length=self.max_input_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
         )
-    return MockRecipeDataset(tokenizer, cfg, "train"), MockRecipeDataset(tokenizer, cfg, "val")
+        labels = self.tokenizer(
+            target_text,
+            max_length=self.max_target_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        ).input_ids
+        labels[labels == self.tokenizer.pad_token_id] = -100
+
+        return {
+            "input_ids": model_inputs.input_ids.squeeze(0),
+            "attention_mask": model_inputs.attention_mask.squeeze(0),
+            "labels": labels.squeeze(0),
+        }
+
+
+def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Dataset]:
+    data_source = cfg["data"]["source"]
+    if data_source == "mock":
+        return MockRecipeDataset(tokenizer, cfg, "train"), MockRecipeDataset(tokenizer, cfg, "val")
+    if data_source == "jsonl":
+        return (
+            JsonlRecipeDataset(
+                dataset_path=cfg["data"]["train_path"],
+                tokenizer=tokenizer,
+                task_prefix=cfg["model"]["task_prefix"],
+                max_input_length=cfg["tokenization"]["max_input_length"],
+                max_target_length=cfg["tokenization"]["max_target_length"],
+            ),
+            JsonlRecipeDataset(
+                dataset_path=cfg["data"]["eval_path"],
+                tokenizer=tokenizer,
+                task_prefix=cfg["model"]["task_prefix"],
+                max_input_length=cfg["tokenization"]["max_input_length"],
+                max_target_length=cfg["tokenization"]["max_target_length"],
+            ),
+        )
+    raise ValueError(f"Unsupported data.source {data_source!r}; expected one of ('mock', 'jsonl').")
 
 
 def build_dataloaders(
@@ -391,7 +511,7 @@ def build_dataloaders(
 
 
 def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "model_name": cfg["model"]["name"],
         "model_source": resolve_model_source(cfg),
         "data_source": cfg["data"]["source"],
@@ -404,6 +524,10 @@ def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_dir": cfg["checkpointing"]["checkpoint_dir"],
         "tracking_uri": cfg["mlflow"]["tracking_uri"],
     }
+    if cfg["data"]["source"] == "jsonl":
+        summary["train_path"] = cfg["data"]["train_path"]
+        summary["eval_path"] = cfg["data"]["eval_path"]
+    return summary
 
 
 def summarize_batch(batch: dict[str, torch.Tensor]) -> str:

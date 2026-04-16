@@ -251,11 +251,80 @@ def load_config(yaml_path: str) -> dict[str, Any]:
     with open(yaml_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
 
-    data_source = config["data"]["source"]
-    if data_source != "mock":
+    data_cfg = config.setdefault("data", {})
+    data_source = data_cfg.get("source", "mock")
+    if data_source not in {"mock", "jsonl"}:
         raise ValueError(
-            f"Unsupported data.source {data_source!r}; only 'mock' is supported in the remote-MLflow-only setup."
+            f"Unsupported data.source {data_source!r}; expected one of ('mock', 'jsonl')."
         )
+    if data_source == "jsonl":
+        config_dir = Path(yaml_path).resolve().parent
+
+        def resolve_config_path(path_value: str) -> Path:
+            raw_path = Path(os.path.expandvars(os.path.expanduser(path_value)))
+            if raw_path.is_absolute():
+                return raw_path
+            return (config_dir / raw_path).resolve()
+
+        env_train_path = os.getenv("TRAIN_JSONL_PATH") or os.getenv("TRAIN_DATA_PATH")
+        env_eval_path = os.getenv("EVAL_JSONL_PATH") or os.getenv("EVAL_DATA_PATH")
+        env_data_dir = os.getenv("TRAINING_DATA_DIR") or os.getenv("DATA_DIR")
+
+        configured_data_dir = data_cfg.get("data_dir")
+        configured_train_file = data_cfg.get("train_file", "train.jsonl")
+        configured_eval_file = data_cfg.get("eval_file", "eval.jsonl")
+        configured_train_path = data_cfg.get("train_path")
+        configured_eval_path = data_cfg.get("eval_path")
+
+        candidate_dirs: list[Path] = []
+        if env_data_dir:
+            candidate_dirs.append(Path(os.path.expandvars(os.path.expanduser(env_data_dir))))
+        if configured_data_dir:
+            candidate_dirs.append(resolve_config_path(str(configured_data_dir)))
+        candidate_dirs.extend(
+            [
+                (Path.cwd() / "data").resolve(),
+                (config_dir.parent / "data").resolve(),
+                (config_dir.parent.parent / "data").resolve(),
+                Path("/app/data"),
+            ]
+        )
+
+        unique_candidate_dirs: list[Path] = []
+        for candidate_dir in candidate_dirs:
+            if candidate_dir not in unique_candidate_dirs:
+                unique_candidate_dirs.append(candidate_dir)
+
+        def resolve_dataset_path(
+            *,
+            explicit_path: Any,
+            env_path: str | None,
+            default_file_name: str,
+        ) -> Path:
+            if env_path:
+                return Path(os.path.expandvars(os.path.expanduser(env_path)))
+            if explicit_path:
+                return resolve_config_path(str(explicit_path))
+            for candidate_dir in unique_candidate_dirs:
+                candidate_path = candidate_dir / default_file_name
+                if candidate_path.exists():
+                    return candidate_path
+            return unique_candidate_dirs[0] / default_file_name
+
+        train_path = resolve_dataset_path(
+            explicit_path=configured_train_path,
+            env_path=env_train_path,
+            default_file_name=str(configured_train_file),
+        )
+        eval_path = resolve_dataset_path(
+            explicit_path=configured_eval_path,
+            env_path=env_eval_path,
+            default_file_name=str(configured_eval_file),
+        )
+
+        data_cfg["train_path"] = str(train_path)
+        data_cfg["eval_path"] = str(eval_path)
+        data_cfg["data_dir"] = str(train_path.parent)
 
     config["mlflow"].setdefault(
         "tuning_experiment_name",

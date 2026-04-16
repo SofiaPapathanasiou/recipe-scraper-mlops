@@ -3,6 +3,7 @@ import copy
 import json
 import math
 import os
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -55,6 +56,7 @@ from utils import (
     run_distributed_trial,
     sample_trial_params,
     save_checkpoint,
+    save_checkpoint_to_path,
     serialize_training_result,
     summarize_training_config,
     summarize_batch,
@@ -124,6 +126,9 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     debug_log(accelerator, f"Accelerator prepared objects on device {accelerator.device}.", main_process_only=False)
 
     checkpoint_dir = Path(config_dict["checkpointing"]["checkpoint_dir"])
+    save_intermediate_checkpoints = bool(
+        config_dict["checkpointing"].get("save_intermediate_checkpoints", True)
+    )
     objective_metric_name = context.objective_metric_name or config_dict["evaluation"]["metric_for_best_model"]
     objective_direction = context.objective_direction or infer_metric_direction(objective_metric_name)
     best_metric = initial_best_metric(objective_direction)
@@ -145,11 +150,22 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         context,
     )
     run_checkpoint_dir = resolve_run_checkpoint_dir(checkpoint_dir, run_id)
+    temp_best_checkpoint_dir: tempfile.TemporaryDirectory[str] | None = None
+    if not save_intermediate_checkpoints:
+        temp_best_checkpoint_dir = tempfile.TemporaryDirectory(prefix="recipe-best-checkpoint-")
     training_start = time.time()
     debug_log(
         accelerator,
-        f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
-        f"local checkpoints will be stored under {run_checkpoint_dir}",
+        (
+            f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
+            f"local checkpoints will be stored under {run_checkpoint_dir}"
+        )
+        if save_intermediate_checkpoints
+        else (
+            f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
+            f"intermediate local checkpoint saving is disabled and only a temporary best checkpoint "
+            f"will be kept under {temp_best_checkpoint_dir.name}"
+        ),
         section="RUN CONTEXT",
     )
 
@@ -306,28 +322,51 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 )
                 raise optuna.TrialPruned(f"Trial pruned at epoch {epoch} with {objective_metric_name}={current_metric:.4f}")
 
-            checkpoint_path = save_checkpoint(
-                accelerator,
-                model,
-                tokenizer,
-                run_checkpoint_dir,
-                epoch,
-                epoch_metrics,
-            )
-            debug_log(
-                accelerator,
-                f"Epoch {epoch} complete. Checkpoint saved to {checkpoint_path}. "
-                f"Metrics: {json.dumps(epoch_metrics, sort_keys=True)}",
-                section=f"EPOCH {epoch} COMPLETE",
-            )
+            checkpoint_path: str | None = None
+            if save_intermediate_checkpoints:
+                checkpoint_path = save_checkpoint(
+                    accelerator,
+                    model,
+                    tokenizer,
+                    run_checkpoint_dir,
+                    epoch,
+                    epoch_metrics,
+                )
+                debug_log(
+                    accelerator,
+                    f"Epoch {epoch} complete. Checkpoint saved to {checkpoint_path}. "
+                    f"Metrics: {json.dumps(epoch_metrics, sort_keys=True)}",
+                    section=f"EPOCH {epoch} COMPLETE",
+                )
+            else:
+                debug_log(
+                    accelerator,
+                    f"Epoch {epoch} complete. Intermediate checkpoint saving is disabled. "
+                    f"Metrics: {json.dumps(epoch_metrics, sort_keys=True)}",
+                    section=f"EPOCH {epoch} COMPLETE",
+                )
+
+            is_new_best = is_better_metric(current_metric, best_metric, objective_direction)
+            if is_new_best:
+                best_metric = current_metric
+                if save_intermediate_checkpoints:
+                    best_checkpoint = checkpoint_path
+                else:
+                    if temp_best_checkpoint_dir is None:
+                        raise RuntimeError("Temporary checkpoint directory was not initialized.")
+                    best_checkpoint = save_checkpoint_to_path(
+                        accelerator,
+                        model,
+                        tokenizer,
+                        Path(temp_best_checkpoint_dir.name) / f"epoch-{epoch:02d}",
+                        epoch_metrics,
+                    )
 
             if accelerator.is_main_process:
                 mlflow.log_metrics(epoch_metrics, step=global_step)
                 mlflow.log_metric("objective_value", current_metric, step=global_step)
 
-                if is_better_metric(current_metric, best_metric, objective_direction):
-                    best_metric = current_metric
-                    best_checkpoint = checkpoint_path
+                if is_new_best:
                     mlflow.log_metric(
                         f"best_{objective_metric_name}",
                         best_metric,
@@ -459,6 +498,8 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     finally:
         if accelerator.is_main_process and mlflow.active_run() is not None:
             mlflow.end_run()
+        if temp_best_checkpoint_dir is not None:
+            temp_best_checkpoint_dir.cleanup()
         accelerator.end_training()
 
 

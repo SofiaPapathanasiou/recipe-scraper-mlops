@@ -47,6 +47,7 @@ from .utils_mlflow import (
     maybe_start_mlflow_run,
     resolve_run_checkpoint_dir,
     save_checkpoint,
+    save_checkpoint_to_path,
     write_optuna_search_space_file,
 )
 from .utils_optuna import (

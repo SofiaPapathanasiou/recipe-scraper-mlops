@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -390,8 +391,27 @@ def save_checkpoint(
     metrics: dict[str, float],
 ) -> str:
     path = checkpoint_dir / f"epoch-{epoch:02d}"
+    return save_checkpoint_to_path(
+        accelerator=accelerator,
+        model=model,
+        tokenizer=tokenizer,
+        checkpoint_path=path,
+        metrics=metrics,
+    )
+
+
+def save_checkpoint_to_path(
+    accelerator: Accelerator,
+    model: torch.nn.Module,
+    tokenizer: Any,
+    checkpoint_path: Path,
+    metrics: dict[str, float],
+) -> str:
+    path = checkpoint_path
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
+        if path.exists():
+            shutil.rmtree(path)
         path.mkdir(parents=True, exist_ok=True)
         accelerator.unwrap_model(model).save_pretrained(
             path,
