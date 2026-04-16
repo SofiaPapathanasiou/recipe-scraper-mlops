@@ -69,6 +69,22 @@
         --from-literal=dbname={{ postgres_db }}
       register: postgres_secret_create
 
+    - name: Check if MLflow S3 secret already exists
+      command: kubectl get secret mlflow-s3-credentials -n recipe-scraper-platform
+      register: mlflow_s3_secret_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create MLflow S3 credentials secret
+      when: mlflow_s3_secret_check.rc != 0
+      command: >
+        kubectl create secret generic mlflow-s3-credentials
+        --namespace recipe-scraper-platform
+        --from-literal=AWS_ACCESS_KEY_ID={{ lookup('env', 'OS_APPLICATION_CREDENTIAL_ID') }}
+        --from-literal=AWS_SECRET_ACCESS_KEY={{ lookup('env', 'OS_APPLICATION_CREDENTIAL_SECRET') }}
+        --from-literal=BUCKET_NAME={{ lookup('env', 'MLFLOW_BUCKET_NAME') }}
+      register: mlflow_s3_secret_create
+
     - name: Check if ArgoCD application exists
       command: >
         argocd app get {{ app_name }} --port-forward --port-forward-namespace=argocd
