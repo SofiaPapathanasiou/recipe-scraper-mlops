@@ -5,6 +5,16 @@
 Checkpoint 2: Validate training pairs before retraining.
 Run before kicking off LoRA retraining.
 """
+
+import subprocess
+
+def upload_report_to_swift(local_path, object_name):
+    subprocess.run([
+        "swift", "upload", "ObjStore_proj22",
+        local_path, "--object-name", object_name
+    ], capture_output=True)
+    print(f"  Report uploaded to object store: {object_name}")
+
 import json
 import os
 import sys
@@ -59,6 +69,11 @@ def main():
     if not report['pass']:
         print("  WARNING: Training set quality check failed! Do not retrain.")
         sys.exit(1)
+    upload_report_to_swift(
+        f"{REPORT_DIR}/qc_training_set.json",
+        "quality_reports/qc_training_set.json"
+    )
 
 if __name__ == "__main__":
     main()
+
