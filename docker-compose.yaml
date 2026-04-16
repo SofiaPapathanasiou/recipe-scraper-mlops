@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  postgres:
+    image: postgres:15
+    container_name: mealie-postgres
+    environment:
+      POSTGRES_DB: mealie
+      POSTGRES_USER: mealie
+      POSTGRES_PASSWORD: mealie_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  pgdata:
