@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: recipe-triton-analysis
+  namespace: ml-serving
+spec:
+  metrics:
+    - name: failure-rate
+      interval: 1m
+      count: 3
+      successCondition: result[0] <= 0.05
+      failureCondition: result[0] > 0.05
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://host.docker.internal:9090
+          query: |
+            sum(rate(nv_inference_request_failure[5m]))
+            /
+            clamp_min(
+              sum(rate(nv_inference_request_success[5m])) +
+              sum(rate(nv_inference_request_failure[5m])),
+              0.0001
+            )
