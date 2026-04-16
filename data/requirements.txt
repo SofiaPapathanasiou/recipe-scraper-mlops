@@ -1,0 +1,4 @@
+tqdm
+pandas
+python-swiftclient
+python-keystoneclient
