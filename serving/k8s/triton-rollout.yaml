@@ -1,0 +1,124 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: recipe-triton
+  namespace: ml-serving
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+
+  selector:
+    matchLabels:
+      app: recipe-triton
+
+  template:
+    metadata:
+      labels:
+        app: recipe-triton
+    spec:
+      initContainers:
+        - name: init-models
+          image: python:3.11
+          command:
+            - bash
+            - -lc
+            - |
+              set -ex
+
+              apt-get update
+              apt-get install -y python3-pip
+              pip install --no-cache-dir python-swiftclient python-keystoneclient
+              
+              source /home/cc/app-cred-proj22_serving-openrc.sh
+
+              echo "AUTH ENV AFTER SOURCE/UNSET"
+              env | grep '^OS_' | sort
+              swift stat proj22-mlflow-artifacts
+
+              MODEL_CONTAINER="proj22-mlflow-artifacts"
+              MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
+
+              rm -rf /models/recipe_model
+              mkdir -p /models/recipe_model/1
+
+              cp /src/models/recipe_model/config.pbtxt /models/recipe_model/config.pbtxt
+              cp /src/models/recipe_model/1/model.py /models/recipe_model/1/model.py
+
+              cd /models/recipe_model/1
+              swift download --ignore-checksum "$MODEL_CONTAINER" --prefix "${MODEL_PREFIX}/"
+
+              if [ -d "${MODEL_PREFIX}" ]; then
+                cp -r "${MODEL_PREFIX}/"* .
+                rm -rf 1
+              fi
+
+              find /models -maxdepth 8 -type f | sort
+          volumeMounts:
+            - name: triton-models
+              mountPath: /models
+            - name: project-src
+              mountPath: /src
+            - name: openrc
+              mountPath: /home/cc
+              readOnly: true
+
+      containers:
+        - name: triton
+          image: recipe_triton-triton:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - >
+              tritonserver
+              --model-repository=/models
+              --allow-http=true
+              --allow-grpc=true
+              --allow-metrics=true
+          ports:
+            - containerPort: 8000
+            - containerPort: 8001
+            - containerPort: 8002
+
+          readinessProbe:
+            httpGet:
+              path: /v2/health/ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /v2/health/live
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: triton-models
+              mountPath: /models
+
+      volumes:
+        - name: triton-models
+          emptyDir: {}
+
+        - name: project-src
+          hostPath:
+            path: /home/cc/recipe-scraper-mlops/serving
+            type: Directory
+
+        - name: openrc
+          hostPath:
+            path: /home/cc
+            type: Directory
+
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {}
+        - analysis:
+            templates:
+              - templateName: recipe-triton-analysis
+        - setWeight: 100
