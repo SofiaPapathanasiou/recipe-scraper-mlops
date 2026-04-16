@@ -77,7 +77,7 @@ ENV PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
     MLFLOW_TRACKING_URI=http://129.114.26.23:8000/ \
     TRAIN_SCRIPT=train.py \
-    TRAIN_CONFIG=config.yaml \
+    TRAIN_CONFIG=config/config.yaml \
     TRAIN_MODE=train \
     TRAIN_EXTRA_ARGS=
 

@@ -107,7 +107,7 @@ docker compose exec jupyter python
 Run a one-off command in the Jupyter environment:
 
 ```bash
-docker compose exec jupyter python train.py --config /app/config.yaml --mode train
+docker compose exec jupyter python train.py --config /app/config/config.yaml --mode train
 ```
 
 Launch the notebook workbench from Jupyter Lab:
@@ -156,10 +156,10 @@ Behavior by mode:
 Key environment variables:
 
 - `TRAIN_MODE`: `train` or `tune`
-- `TRAIN_CONFIG`: config path inside the container, default `config.yaml`
+- `TRAIN_CONFIG`: config path inside the container, default `config/config.yaml`
 - `TRAIN_EXTRA_ARGS`: extra CLI flags appended to the training command
 - `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count
-- `ACCELERATE_CONFIG_FILE`: Accelerate config path, default `accelerate_config.yaml`
+- `ACCELERATE_CONFIG_FILE`: optional override for Accelerate config path. If unset, the launcher reads the `accelerate` block from `TRAIN_CONFIG`
 - `MLFLOW_TRACKING_URI`: remote tracking server override
 
 The training container is not started by `docker compose up -d` unless you explicitly
@@ -206,8 +206,19 @@ Use a different config file:
 
 ```bash
 docker compose --profile training run --rm \
-  -e TRAIN_CONFIG=/app/config.yaml \
+  -e TRAIN_CONFIG=/app/config/config.yaml \
   training
+```
+
+Set Accelerate launch options directly in your train config:
+
+```yaml
+accelerate:
+  compute_environment: LOCAL_MACHINE
+  distributed_type: MULTI_GPU
+  num_processes: 1
+  mixed_precision: fp16
+  dynamo_backend: "no"
 ```
 
 Override the number of processes:
@@ -244,13 +255,13 @@ docker compose --profile training run --rm --entrypoint bash training
 From that shell, run the script directly:
 
 ```bash
-python train.py --config config.yaml --mode train
+python train.py --config config/config.yaml --mode train
 ```
 
 Or run tune mode directly:
 
 ```bash
-python train.py --config config.yaml --mode tune
+python train.py --config config/config.yaml --mode tune
 ```
 
 ## What Train And Tune Actually Do
@@ -258,10 +269,10 @@ python train.py --config config.yaml --mode tune
 Standard training:
 
 ```bash
-python train.py --config config.yaml --mode train
+python train.py --config config/config.yaml --mode train
 ```
 
-- Uses [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config.yaml)
+- Uses [`config.yaml`](/home/cc/recipe-scraper-mlops/training/config/config.yaml)
 - Uses mock-generated data only in this refactor
 - Tracks runs in the remote MLflow server
 - Saves local checkpoints under `/app/checkpoints/...`
@@ -272,10 +283,10 @@ python train.py --config config.yaml --mode train
 Hyperparameter tuning:
 
 ```bash
-python train.py --config config.yaml --mode tune
+python train.py --config config/config.yaml --mode tune
 ```
 
-- Uses Optuna settings and search space from `config.yaml`
+- Uses Optuna settings and search space from [`optuna.yaml`](/home/cc/recipe-scraper-mlops/training/config/optuna.yaml)
 - Uses the tuning experiment name as the Optuna study name
 - Creates one top-level MLflow run per Optuna trial within the tuning experiment
 - Launches each trial with `accelerate` across the requested visible GPUs
@@ -288,8 +299,8 @@ python train.py --config config.yaml --mode tune
 Override the experiment name for either mode:
 
 ```bash
-python train.py --config config.yaml --mode train --experiment-name my-experiment
-python train.py --config config.yaml --mode tune --experiment-name my-experiment
+python train.py --config config/config.yaml --mode train --experiment-name my-experiment
+python train.py --config config/config.yaml --mode tune --experiment-name my-experiment
 ```
 
 Without a CLI override:
@@ -309,7 +320,7 @@ docker compose exec jupyter bash
 Run an interactive experiment from inside Jupyter:
 
 ```bash
-python train.py --config config.yaml --mode train --experiment-name notebook-dev
+python train.py --config config/config.yaml --mode train --experiment-name notebook-dev
 ```
 
 Or use the notebook workbench for the same flows from Jupyter Lab:

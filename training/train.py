@@ -687,6 +687,49 @@ def best_metric_to_log(best_metric: float, direction: str) -> float:
     return best_metric if best_metric > -float("inf") else 0.0
 
 
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def load_central_optuna_config(config_dir: Path, model_name: str) -> dict[str, Any]:
+    optuna_config_path = config_dir / "optuna.yaml"
+    if not optuna_config_path.exists():
+        return {}
+
+    with open(optuna_config_path, "r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: expected a mapping.")
+
+    default_cfg = payload.get("default", {})
+    model_cfgs = payload.get("models", {})
+    if default_cfg is None:
+        default_cfg = {}
+    if model_cfgs is None:
+        model_cfgs = {}
+    if not isinstance(default_cfg, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: 'default' must be a mapping.")
+    if not isinstance(model_cfgs, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: 'models' must be a mapping.")
+
+    model_cfg = model_cfgs.get(model_name, {})
+    if model_cfg is None:
+        model_cfg = {}
+    if not isinstance(model_cfg, dict):
+        raise ValueError(
+            f"Invalid Optuna config in {optuna_config_path}: models.{model_name} must be a mapping."
+        )
+
+    return deep_merge_dicts(default_cfg, model_cfg)
+
+
 def load_config(yaml_path: str) -> dict[str, Any]:
     with open(yaml_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -702,7 +745,14 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         f"{config['mlflow']['experiment_name']}-optuna",
     )
     config["mlflow"]["tracking_uri"] = resolve_mlflow_tracking_uri(config)
-    config.setdefault("optuna", {})
+    file_optuna_cfg = config.get("optuna", {})
+    if file_optuna_cfg is None:
+        file_optuna_cfg = {}
+    if not isinstance(file_optuna_cfg, dict):
+        raise ValueError("optuna must be a mapping when defined in the training config.")
+    model_name = str(config.get("model", {}).get("name", "")).strip()
+    central_optuna_cfg = load_central_optuna_config(Path(yaml_path).resolve().parent, model_name)
+    config["optuna"] = deep_merge_dicts(central_optuna_cfg, file_optuna_cfg)
     config["optuna"]["study_name"] = get_optuna_study_name(config)
     model_registry_cfg = config.setdefault("model_registry", {})
     model_registry_cfg.setdefault(
@@ -710,7 +760,18 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         config.get("mlflow", {}).get("registered_model_name") or config["model"]["name"],
     )
     model_registry_cfg.setdefault("log_to_mlflow_model_registry", True)
+    accelerate_cfg = config.get("accelerate")
+    if accelerate_cfg is not None and not isinstance(accelerate_cfg, dict):
+        raise ValueError("accelerate must be a mapping when defined in the training config.")
     return config
+
+
+def resolve_default_config_path() -> str:
+    script_dir = Path(__file__).resolve().parent
+    new_path = script_dir / "config" / "config.yaml"
+    if new_path.exists():
+        return str(new_path)
+    return str(script_dir / "config.yaml")
 
 
 def load_training_context(context_path: str | None) -> TrainingContext | None:
@@ -915,11 +976,39 @@ def resolve_tune_num_processes() -> int:
     return min(parsed, available_gpu_count)
 
 
-def resolve_accelerate_config_path() -> str:
+def resolve_accelerate_config_path(
+    cfg: dict[str, Any] | None = None,
+    *,
+    output_path: Path | None = None,
+) -> str:
     configured_path = os.getenv("ACCELERATE_CONFIG_FILE")
     if configured_path:
         return configured_path
-    return str(Path(__file__).with_name("accelerate_config.yaml"))
+
+    embedded_cfg = cfg.get("accelerate") if isinstance(cfg, dict) else None
+    if embedded_cfg is not None:
+        if not isinstance(embedded_cfg, dict):
+            raise ValueError("accelerate must be a mapping when defined in the training config.")
+        if not embedded_cfg:
+            raise ValueError("accelerate mapping is empty; remove it or provide Accelerate settings.")
+
+        destination = output_path
+        if destination is None:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix="accelerate-config-",
+                suffix=".yaml",
+                delete=False,
+                encoding="utf-8",
+            ) as handle:
+                destination = Path(handle.name)
+        write_yaml_file(destination, embedded_cfg)
+        return str(destination)
+
+    raise ValueError(
+        "Config must define a non-empty 'accelerate' mapping when "
+        "ACCELERATE_CONFIG_FILE is not set."
+    )
 
 
 def load_progress_updates(progress_path: Path, seen_epochs: set[int]) -> list[dict[str, Any]]:
@@ -947,11 +1036,14 @@ def run_distributed_trial(
     trial: optuna.trial.Trial,
 ) -> TrainingResult:
     num_processes = resolve_tune_num_processes()
-    accelerate_config_path = resolve_accelerate_config_path()
     script_path = Path(__file__).resolve()
 
     with tempfile.TemporaryDirectory(prefix=f"optuna-trial-{trial.number:04d}-") as temp_dir:
         temp_root = Path(temp_dir)
+        accelerate_config_path = resolve_accelerate_config_path(
+            cfg,
+            output_path=temp_root / "accelerate_config.yaml",
+        )
         config_path = temp_root / "resolved_config.yaml"
         context_path = temp_root / "training_context.json"
         progress_path = temp_root / "progress.jsonl"
@@ -2270,7 +2362,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train a T5 recipe-correction model with Accelerate.")
     parser.add_argument(
         "--config",
-        default=str(Path(__file__).with_name("config.yaml")),
+        default=resolve_default_config_path(),
         help="Path to the training config YAML file.",
     )
     parser.add_argument(

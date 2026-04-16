@@ -17,6 +17,13 @@ training:
   max_grad_norm: 1.0
   seed: 42
 
+accelerate:
+  compute_environment: LOCAL_MACHINE
+  distributed_type: MULTI_GPU
+  num_processes: 1
+  mixed_precision: fp16
+  dynamo_backend: "no"
+
 evaluation:
   logging_steps: 10
   eval_steps: 500
@@ -37,39 +44,6 @@ model_registry:
   log_to_mlflow_model_registry: true
   model_name: recipe-correction-t5-small
 
-optuna:
-  direction: maximize
-  n_trials: 5
-  timeout_sec: null
-  storage: null
-  sampler:
-    type: tpe
-    seed: 42
-  pruner:
-    type: median
-    n_startup_trials: 2
-    n_warmup_steps: 1
-  search_space:
-    training.learning_rate:
-      type: float
-      low: 1.0e-5
-      high: 1.0e-3
-      log: true
-    training.weight_decay:
-      type: float
-      low: 0.0
-      high: 0.1
-    training.warmup_ratio:
-      type: float
-      low: 0.0
-      high: 0.2
-    training.gradient_accumulation_steps:
-      type: int
-      low: 1
-      high: 8
-    training.per_device_train_batch_size:
-      type: categorical
-      choices: [4, 8, 16]
 
 data:
   source: mock

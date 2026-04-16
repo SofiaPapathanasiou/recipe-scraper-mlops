@@ -21,8 +21,7 @@ services:
       PYTHONPATH: /app
       VENV_PATH: /opt/venv
       TRAIN_SCRIPT: /app/train.py
-      TRAIN_CONFIG: /app/config.yaml
-      ACCELERATE_CONFIG_FILE: /app/accelerate_config.yaml
+      TRAIN_CONFIG: /app/config/config.yaml
       NUM_PROCESSES: ${NUM_PROCESSES:-2}
       <<: *runtime-env
     working_dir: /app
