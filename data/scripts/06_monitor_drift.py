@@ -12,9 +12,9 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from quality.checks import check_inference_drift, save_report
 
-PROCESSED_DIR = os.path.expanduser("~/mealie-data/data/processed")
-INFERENCE_LOG = os.path.expanduser("~/mealie-data/data/inference_log.jsonl")
-REPORT_DIR = os.path.expanduser("~/mealie-data/data/quality_reports/drift")
+PROCESSED_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/processed")
+INFERENCE_LOG = os.path.expanduser("~/recipe-scraper-mlops/data/inference_log.jsonl")
+REPORT_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/reports/drift")
 
 def load_jsonl(path, key, limit=1000):
     records = []

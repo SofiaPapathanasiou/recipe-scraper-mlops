@@ -12,8 +12,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from quality.checks import check_training_set_quality, save_report
 
-PROCESSED_DIR = os.path.expanduser("~/mealie-data/data/processed")
-REPORT_DIR = os.path.expanduser("~/mealie-data/data/quality_reports")
+PROCESSED_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/processed")
+REPORT_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/reports")
 
 def load_jsonl(path):
     records = []
@@ -53,7 +53,7 @@ def main():
     print(f"  Missing target:       {report['missing_target']}")
     print(f"  Identical pairs:      {report['identical_pairs']} ({report['identical_pct']}%)")
     print(f"  Too short pairs:      {report['too_short_pairs']}")
-    print(f"  Missing fix prefix:   {report['missing_fix_prefix']}")
+    print(f"  Missing fix prefix:   {report.get('missing_fix_prefix', 0)}")
     print(f"\n  RESULT: {'✅ PASSED' if report['pass'] else '❌ FAILED'}")
 
     if not report['pass']:
