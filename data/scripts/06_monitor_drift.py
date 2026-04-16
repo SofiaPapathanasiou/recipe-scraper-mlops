@@ -7,6 +7,7 @@ Run via cron every hour in production.
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -15,6 +16,13 @@ from quality.checks import check_inference_drift, save_report
 PROCESSED_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/processed")
 INFERENCE_LOG = os.path.expanduser("~/recipe-scraper-mlops/data/inference_log.jsonl")
 REPORT_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/reports/drift")
+
+def upload_report_to_swift(local_path, object_name):
+    subprocess.run([
+        "swift", "upload", "ObjStore_proj22",
+        local_path, "--object-name", object_name
+    ], capture_output=True)
+    print(f"  Report uploaded to object store: {object_name}")
 
 def load_jsonl(path, key, limit=1000):
     records = []
@@ -65,6 +73,11 @@ def main():
     print(f"  Title missing rate:   {report['title_missing_rate_pct']}%")
     print(f"  Ingredients missing:  {report['ingredients_missing_rate_pct']}%")
     print(f"\n  RESULT: {'✅ PASSED' if report['pass'] else '❌ FAILED - Drift detected!'}")
+
+    upload_report_to_swift(
+        f"{REPORT_DIR}/drift_{ts}.json",
+        f"quality_reports/drift/drift_{ts}.json"
+    )
 
     if not report['pass']:
         print("  ALERT: Significant drift detected! Consider retraining.")
