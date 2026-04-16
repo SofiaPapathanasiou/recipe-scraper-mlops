@@ -8,6 +8,8 @@
 data/
 checkpoints/
 .cache/
+.venv/
+mlruns/
 
 # Python bytecode
 __pycache__/

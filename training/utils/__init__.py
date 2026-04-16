@@ -2,7 +2,6 @@ from .utils_core import (
     TrainingContext,
     TrainingResult,
     append_jsonl_file,
-    apply_trial_params,
     best_metric_to_log,
     deep_merge_dicts,
     deserialize_training_context,
@@ -51,6 +50,7 @@ from .utils_mlflow import (
     write_optuna_search_space_file,
 )
 from .utils_optuna import (
+    apply_trial_params,
     build_optuna_pruner,
     build_optuna_sampler,
     build_trial_summary,

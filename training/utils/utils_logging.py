@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from accelerate import Accelerator
@@ -74,6 +75,3 @@ def debug_log(
         accelerator.print(f"{prefix} {LOG_SUBDELIMITER}")
         accelerator.print(f"{prefix} {section}")
     accelerator.print(f"{prefix} {message}")
-
-
-def log_temp_artifact(content: str, filename: str, artifact_path: str | None = None) -> None:
