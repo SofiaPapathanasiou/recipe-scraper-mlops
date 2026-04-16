@@ -216,3 +216,5 @@ devops/tf/kvm/.terraform/
 data/processed/
 data/reports/drift/
 data/reports/*.json
+eval.jsonl
+train.jsonl
