@@ -41,13 +41,59 @@ spec:
             secretKeyRef:
               name: postgres-credentials
               key: dbname
+        # --- Object storage config (replaces PVC) ---
+        - name: MLFLOW_TRACKING_URI
+          value: "http://0.0.0.0:8000"
+        - name: MLFLOW_LOGGING_LEVEL
+          value: "ERROR"
+        - name: MLFLOW_SERVER_ALLOWED_HOSTS
+          value: "*"
+        - name: MLFLOW_S3_ENDPOINT_URL
+          value: "https://chi.tacc.chameleoncloud.org:7480"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-credentials
+              key: AWS_SECRET_ACCESS_KEY
+        - name: BUCKET_NAME
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-credentials
+              key: BUCKET_NAME
         command: ["/bin/sh", "-c"]
         args:
-        - pip install psycopg2-binary && mlflow server --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}" --artifacts-destination /mlflow/artifacts --serve-artifacts --host 0.0.0.0 --port 8000 --app-name basic-auth || mlflow server --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}" --artifacts-destination /mlflow/artifacts --serve-artifacts --host 0.0.0.0 --port 8000
-        volumeMounts:
-        - name: mlflow-artifacts
-          mountPath: /mlflow/artifacts
-      volumes:
-      - name: mlflow-artifacts
-        persistentVolumeClaim:
-          claimName: mlflow-artifacts-pvc
+        - >
+          pip install psycopg2-binary boto3 &&
+          mlflow server
+          --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}"
+          --artifacts-destination "s3://${BUCKET_NAME}/"
+          --serve-artifacts
+          --host 0.0.0.0
+          --port 8000
+          --app-name basic-auth ||
+          mlflow server
+          --backend-store-uri "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}"
+          --artifacts-destination "s3://${BUCKET_NAME}/"
+          --serve-artifacts
+          --host 0.0.0.0
+          --port 8000
+        # No volumeMounts - artifacts go to object storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: recipe-scraper-platform
+spec:
+  selector:
+    app: mlflow
+  type: NodePort
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30800
