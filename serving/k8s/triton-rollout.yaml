@@ -64,6 +64,9 @@ spec:
 
       containers:
         - name: triton
+          env:
+            - name: VERSION
+              value: "v6"
           image: recipe_triton-triton:latest
           imagePullPolicy: IfNotPresent
           command:
@@ -117,7 +120,8 @@ spec:
     canary:
       steps:
         - setWeight: 20
-        - pause: {}
+        - pause: 
+            duration: 120s
         - analysis:
             templates:
               - templateName: recipe-triton-analysis
