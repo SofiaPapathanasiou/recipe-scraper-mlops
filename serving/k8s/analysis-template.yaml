@@ -13,12 +13,6 @@ spec:
       failureLimit: 1
       provider:
         prometheus:
-          address: http://host.docker.internal:9090
+          address: http://129.114.109.150:9090
           query: |
-            sum(rate(nv_inference_request_failure[5m]))
-            /
-            clamp_min(
-              sum(rate(nv_inference_request_success[5m])) +
-              sum(rate(nv_inference_request_failure[5m])),
-              0.0001
-            )
+            sum(nv_inference_request_success)
