@@ -1,0 +1,449 @@
+import copy
+import json
+import os
+import re
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from huggingface_hub import snapshot_download
+import optuna
+import torch
+import yaml
+
+DEFAULT_MLFLOW_TRACKING_URI = "http://129.114.26.23:8000/"
+
+@dataclass
+class TrainingContext:
+    mode: str = "train"
+    mlflow_experiment_name: str | None = None
+    mlflow_run_name: str | None = None
+    mlflow_nested: bool = False
+    mlflow_parent_run_id: str | None = None
+    mlflow_tags: dict[str, Any] = field(default_factory=dict)
+    register_model: bool | None = None
+    trial: optuna.trial.Trial | None = None
+    objective_direction: str | None = None
+    objective_metric_name: str | None = None
+    trial_params: dict[str, Any] = field(default_factory=dict)
+    progress_file: str | None = None
+    prune_signal_file: str | None = None
+    result_file: str | None = None
+
+
+@dataclass
+class TrainingResult:
+    best_metric: float
+    best_metric_name: str
+    best_checkpoint: str | None
+    run_id: str | None
+    final_metrics: dict[str, float]
+    resolved_config: dict[str, Any]
+
+
+def serialize_training_context(context: TrainingContext) -> dict[str, Any]:
+    return {
+        "mode": context.mode,
+        "mlflow_experiment_name": context.mlflow_experiment_name,
+        "mlflow_run_name": context.mlflow_run_name,
+        "mlflow_nested": context.mlflow_nested,
+        "mlflow_parent_run_id": context.mlflow_parent_run_id,
+        "mlflow_tags": context.mlflow_tags,
+        "register_model": context.register_model,
+        "objective_direction": context.objective_direction,
+        "objective_metric_name": context.objective_metric_name,
+        "trial_params": context.trial_params,
+        "progress_file": context.progress_file,
+        "prune_signal_file": context.prune_signal_file,
+        "result_file": context.result_file,
+    }
+
+
+def deserialize_training_context(payload: dict[str, Any]) -> TrainingContext:
+    return TrainingContext(
+        mode=payload.get("mode", "train"),
+        mlflow_experiment_name=payload.get("mlflow_experiment_name"),
+        mlflow_run_name=payload.get("mlflow_run_name"),
+        mlflow_nested=bool(payload.get("mlflow_nested", False)),
+        mlflow_parent_run_id=payload.get("mlflow_parent_run_id"),
+        mlflow_tags=dict(payload.get("mlflow_tags", {})),
+        register_model=payload.get("register_model"),
+        objective_direction=payload.get("objective_direction"),
+        objective_metric_name=payload.get("objective_metric_name"),
+        trial_params=dict(payload.get("trial_params", {})),
+        progress_file=payload.get("progress_file"),
+        prune_signal_file=payload.get("prune_signal_file"),
+        result_file=payload.get("result_file"),
+    )
+
+
+def serialize_training_result(result: TrainingResult) -> dict[str, Any]:
+    return {
+        "best_metric": result.best_metric,
+        "best_metric_name": result.best_metric_name,
+        "best_checkpoint": result.best_checkpoint,
+        "run_id": result.run_id,
+        "final_metrics": result.final_metrics,
+        "resolved_config": result.resolved_config,
+    }
+
+
+def deserialize_training_result(payload: dict[str, Any]) -> TrainingResult:
+    return TrainingResult(
+        best_metric=float(payload["best_metric"]),
+        best_metric_name=str(payload["best_metric_name"]),
+        best_checkpoint=payload.get("best_checkpoint"),
+        run_id=payload.get("run_id"),
+        final_metrics=dict(payload["final_metrics"]),
+        resolved_config=dict(payload["resolved_config"]),
+    )
+
+
+def flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    flattened: dict[str, Any] = {}
+    for key, value in data.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            flattened.update(flatten_dict(value, full_key))
+        else:
+            flattened[full_key] = value
+    return flattened
+
+
+
+def write_yaml_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=False)
+
+
+def sanitize_study_name(study_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", study_name.strip())
+    return cleaned.strip("-") or "optuna-study"
+
+
+def get_mlflow_experiment_name(cfg: dict[str, Any], mode: str) -> str:
+    if mode == "tune":
+        return cfg["mlflow"].get("active_experiment_name") or cfg["mlflow"]["tuning_experiment_name"]
+    return cfg["mlflow"].get("active_experiment_name") or cfg["mlflow"]["experiment_name"]
+
+
+def get_optuna_study_name(cfg: dict[str, Any]) -> str:
+    return get_mlflow_experiment_name(cfg, "tune")
+
+
+def resolve_mlflow_tracking_uri(cfg: dict[str, Any]) -> str:
+    configured = str(
+        os.getenv("MLFLOW_TRACKING_URI")
+        or cfg.get("mlflow", {}).get("tracking_uri")
+        or DEFAULT_MLFLOW_TRACKING_URI
+    ).strip()
+    return configured or DEFAULT_MLFLOW_TRACKING_URI
+
+
+def ensure_mlflow_experiment(cfg: dict[str, Any], experiment_name: str) -> str:
+    tracking_uri = resolve_mlflow_tracking_uri(cfg)
+    client = MlflowClient(tracking_uri=tracking_uri)
+    existing = client.get_experiment_by_name(experiment_name)
+    if existing is not None:
+        return existing.experiment_id
+
+    try:
+        return client.create_experiment(experiment_name)
+    except Exception:
+        existing = client.get_experiment_by_name(experiment_name)
+        if existing is None:
+            raise
+        return existing.experiment_id
+
+
+def format_mlflow_run_name(run_id: str) -> str:
+    return f"{time.strftime('%Y-%m-%d')}-{run_id}"
+
+
+def get_nested_value(data: dict[str, Any], dotted_path: str) -> Any:
+    current: Any = data
+    for part in dotted_path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(f"Unknown config path: {dotted_path}")
+        current = current[part]
+    return current
+
+
+def set_nested_value(data: dict[str, Any], dotted_path: str, value: Any) -> None:
+    parts = dotted_path.split(".")
+    current: dict[str, Any] = data
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            raise KeyError(f"Unknown config path: {dotted_path}")
+        current = next_value
+    if parts[-1] not in current:
+        raise KeyError(f"Unknown config path: {dotted_path}")
+    current[parts[-1]] = value
+
+
+def infer_metric_direction(metric_name: str) -> str:
+    return "minimize" if "loss" in metric_name.lower() else "maximize"
+
+
+def is_better_metric(candidate: float, best: float, direction: str) -> bool:
+    if direction == "minimize":
+        return candidate < best
+    return candidate > best
+
+
+def initial_best_metric(direction: str) -> float:
+    return float("inf") if direction == "minimize" else -float("inf")
+
+
+def best_metric_to_log(best_metric: float, direction: str) -> float:
+    if direction == "minimize":
+        return best_metric if best_metric < float("inf") else 0.0
+    return best_metric if best_metric > -float("inf") else 0.0
+
+
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def load_central_optuna_config(config_dir: Path, model_name: str) -> dict[str, Any]:
+    optuna_config_path = config_dir / "optuna.yaml"
+    if not optuna_config_path.exists():
+        return {}
+
+    with open(optuna_config_path, "r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: expected a mapping.")
+
+    default_cfg = payload.get("default", {})
+    model_cfgs = payload.get("models", {})
+    if default_cfg is None:
+        default_cfg = {}
+    if model_cfgs is None:
+        model_cfgs = {}
+    if not isinstance(default_cfg, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: 'default' must be a mapping.")
+    if not isinstance(model_cfgs, dict):
+        raise ValueError(f"Invalid Optuna config in {optuna_config_path}: 'models' must be a mapping.")
+
+    model_cfg = model_cfgs.get(model_name, {})
+    if model_cfg is None:
+        model_cfg = {}
+    if not isinstance(model_cfg, dict):
+        raise ValueError(
+            f"Invalid Optuna config in {optuna_config_path}: models.{model_name} must be a mapping."
+        )
+
+    return deep_merge_dicts(default_cfg, model_cfg)
+
+
+def load_config(yaml_path: str) -> dict[str, Any]:
+    with open(yaml_path, "r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+
+    data_source = config["data"]["source"]
+    if data_source != "mock":
+        raise ValueError(
+            f"Unsupported data.source {data_source!r}; only 'mock' is supported in the remote-MLflow-only setup."
+        )
+
+    config["mlflow"].setdefault(
+        "tuning_experiment_name",
+        f"{config['mlflow']['experiment_name']}-optuna",
+    )
+    config["mlflow"]["tracking_uri"] = resolve_mlflow_tracking_uri(config)
+    file_optuna_cfg = config.get("optuna", {})
+    if file_optuna_cfg is None:
+        file_optuna_cfg = {}
+    if not isinstance(file_optuna_cfg, dict):
+        raise ValueError("optuna must be a mapping when defined in the training config.")
+    model_name = str(config.get("model", {}).get("name", "")).strip()
+    central_optuna_cfg = load_central_optuna_config(Path(yaml_path).resolve().parent, model_name)
+    config["optuna"] = deep_merge_dicts(central_optuna_cfg, file_optuna_cfg)
+    config["optuna"]["study_name"] = get_optuna_study_name(config)
+    model_registry_cfg = config.setdefault("model_registry", {})
+    model_registry_cfg.setdefault(
+        "model_name",
+        config.get("mlflow", {}).get("registered_model_name") or config["model"]["name"],
+    )
+    model_registry_cfg.setdefault("log_to_mlflow_model_registry", True)
+    accelerate_cfg = config.get("accelerate")
+    if accelerate_cfg is not None and not isinstance(accelerate_cfg, dict):
+        raise ValueError("accelerate must be a mapping when defined in the training config.")
+    return config
+
+
+def resolve_default_config_path() -> str:
+    script_dir = Path(__file__).resolve().parent
+    new_path = script_dir / "config" / "config.yaml"
+    if new_path.exists():
+        return str(new_path)
+    return str(script_dir / "config.yaml")
+
+
+def load_training_context(context_path: str | None) -> TrainingContext | None:
+    if context_path is None:
+        return None
+    with open(context_path, "r", encoding="utf-8") as handle:
+        return deserialize_training_context(json.load(handle))
+
+
+def write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def append_jsonl_file(path: str | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def prune_requested_via_file(context: TrainingContext) -> bool:
+    if context.prune_signal_file is None:
+        return False
+    return Path(context.prune_signal_file).exists()
+
+
+def write_training_result_payload(context: TrainingContext, payload: dict[str, Any]) -> None:
+    if context.result_file is None:
+        return
+    write_json_file(Path(context.result_file), payload)
+
+def ensure_supported_tune_runtime() -> None:
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    if world_size > 1:
+        raise RuntimeError(
+            "Tune mode must be started as a single controller process. "
+            "The controller launches each trial with Accelerate on the requested GPUs. "
+            "Run tune mode directly, for example with TRAIN_MODE=tune in the Docker training container."
+        )
+
+
+def resolve_tune_num_processes() -> int:
+    available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    requested = os.getenv("NUM_PROCESSES")
+    if requested is None or requested.strip() == "":
+        return available_gpu_count if available_gpu_count > 0 else 1
+
+    try:
+        parsed = int(requested)
+    except ValueError as error:
+        raise ValueError(f"NUM_PROCESSES must be an integer, got {requested!r}.") from error
+
+    if parsed < 1:
+        raise ValueError(f"NUM_PROCESSES must be at least 1, got {parsed}.")
+    if available_gpu_count == 0:
+        return 1
+    return min(parsed, available_gpu_count)
+
+
+def resolve_accelerate_config_path(
+    cfg: dict[str, Any] | None = None,
+    *,
+    output_path: Path | None = None,
+) -> str:
+    configured_path = os.getenv("ACCELERATE_CONFIG_FILE")
+    if configured_path:
+        return configured_path
+
+    embedded_cfg = cfg.get("accelerate") if isinstance(cfg, dict) else None
+    if embedded_cfg is not None:
+        if not isinstance(embedded_cfg, dict):
+            raise ValueError("accelerate must be a mapping when defined in the training config.")
+        if not embedded_cfg:
+            raise ValueError("accelerate mapping is empty; remove it or provide Accelerate settings.")
+
+        destination = output_path
+        if destination is None:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix="accelerate-config-",
+                suffix=".yaml",
+                delete=False,
+                encoding="utf-8",
+            ) as handle:
+                destination = Path(handle.name)
+        write_yaml_file(destination, embedded_cfg)
+        return str(destination)
+
+    raise ValueError(
+        "Config must define a non-empty 'accelerate' mapping when "
+        "ACCELERATE_CONFIG_FILE is not set."
+    )
+
+
+def load_progress_updates(progress_path: Path, seen_epochs: set[int]) -> list[dict[str, Any]]:
+    if not progress_path.exists():
+        return []
+
+    updates: list[dict[str, Any]] = []
+    with open(progress_path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            epoch = int(payload["epoch"])
+            if epoch in seen_epochs:
+                continue
+            seen_epochs.add(epoch)
+            updates.append(payload)
+    return updates
+
+
+
+def resolve_hf_cache_dir(cfg: dict[str, Any]) -> Path:
+    configured = cfg.get("huggingface", {}).get("cache_dir")
+    if configured:
+        return Path(configured).expanduser()
+    checkpoint_dir = Path(cfg["checkpointing"]["checkpoint_dir"]).expanduser()
+    return checkpoint_dir.parent / ".hf-cache"
+
+
+def ensure_hf_cache_env(cache_dir: Path) -> None:
+    hub_dir = cache_dir / "hub"
+    datasets_dir = cache_dir / "datasets"
+    asset_dir = cache_dir / "assets"
+    for directory in (cache_dir, hub_dir, datasets_dir, asset_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("HF_HOME", str(cache_dir))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hub_dir))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(hub_dir))
+    os.environ.setdefault("HF_DATASETS_CACHE", str(datasets_dir))
+    os.environ.setdefault("HF_ASSETS_CACHE", str(asset_dir))
+
+
+def resolve_model_source(cfg: dict[str, Any]) -> str:
+    return str(cfg.get("model", {}).get("local_path") or cfg["model"]["name"])
+
+
+def prepare_model_cache(cfg: dict[str, Any]) -> str:
+    model_source = resolve_model_source(cfg)
+    source_path = Path(model_source).expanduser()
+    if source_path.exists():
+        return str(source_path)
+
+    cache_dir = resolve_hf_cache_dir(cfg)
+    ensure_hf_cache_env(cache_dir)
+    model_snapshot_path = snapshot_download(
+        repo_id=cfg["model"]["name"],
+        cache_dir=str(cache_dir),
+    )
+    cfg.setdefault("model", {})["local_path"] = model_snapshot_path
+    return model_snapshot_path
