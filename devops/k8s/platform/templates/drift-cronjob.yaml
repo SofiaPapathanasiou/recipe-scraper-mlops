@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: drift-monitor
+  namespace: recipe-scraper-platform
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: drift-monitor
+            image: python:3.10-slim
+            command:
+            - /bin/bash
+            - -c
+            - |
+              pip install -q && \
+              python3 /data/scripts/06_monitor_drift.py
+            volumeMounts:
+            - name: data
+              mountPath: /data
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: data-pvc
+          restartPolicy: OnFailure
