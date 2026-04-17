@@ -5,7 +5,53 @@
   vars:
     node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"
     private_cidr: 192.168.1.0/24
+    ubuntu_apt_mirror: http://mirror.math.princeton.edu/pub/ubuntu
   tasks:
+    - name: Wait for cloud-init to finish when available
+      ansible.builtin.shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          cloud-init status --wait
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Configure alternate Ubuntu apt mirror for Chameleon Cloud
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/ubuntu.sources
+        regexp: 'http://security\.ubuntu\.com/ubuntu'
+        replace: "{{ ubuntu_apt_mirror }}"
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Verify Ubuntu apt mirror URIs
+      ansible.builtin.command: grep URIs /etc/apt/sources.list.d/ubuntu.sources
+      register: ubuntu_sources_uris
+      changed_when: false
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Assert Ubuntu apt mirror was updated
+      ansible.builtin.assert:
+        that:
+          - ubuntu_apt_mirror in ubuntu_sources_uris.stdout
+        fail_msg: Ubuntu apt mirror was not updated in /etc/apt/sources.list.d/ubuntu.sources.
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Wait for apt and dpkg locks to clear on Debian hosts
+      ansible.builtin.shell: |
+        timeout 900 bash -lc '
+          while fuser \
+            /var/lib/apt/lists/lock \
+            /var/lib/dpkg/lock \
+            /var/lib/dpkg/lock-frontend \
+            /var/cache/apt/archives/lock >/dev/null 2>&1; do
+            sleep 5
+          done
+        '
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ansible_os_family == "Debian"
+
     - name: Stop and disable firewalld when present
       ansible.builtin.systemd:
         name: firewalld
