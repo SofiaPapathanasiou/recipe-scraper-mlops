@@ -214,3 +214,5 @@ devops/tf/kvm/.terraform/
 *.csv
 *.zip
 data/processed/
+data/reports/drift/
+data/reports/*.json
