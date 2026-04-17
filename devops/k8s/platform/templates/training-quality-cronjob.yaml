@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: training-quality-check
+  namespace: recipe-scraper-platform
+spec:
+  schedule: "0 0 * * 1,4"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: training-quality
+            image: python:3.10-slim
+            command:
+            - /bin/bash
+            - -c
+            - |
+              pip install -q && \
+              python3 /data/scripts/02_quality_training.py
+            volumeMounts:
+            - name: data
+              mountPath: /data
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: data-pvc
+          restartPolicy: OnFailure
