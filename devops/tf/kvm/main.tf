@@ -24,22 +24,21 @@ resource "openstack_networking_port_v2" "private_net_ports" {
 
 resource "openstack_networking_port_v2" "sharednet1_ports" {
   for_each   = var.nodes
-    name       = "sharednet1-${each.key}-recipe-${var.suffix}"
-    network_id = data.openstack_networking_network_v2.sharednet1.id
-    security_group_ids = [
-      data.openstack_networking_secgroup_v2.allow_ssh.id,
-      data.openstack_networking_secgroup_v2.allow_8000.id,
-      data.openstack_networking_secgroup_v2.allow_http_80.id
-    ]
+  name       = "sharednet1-${each.key}-recipe-${var.suffix}"
+  network_id = data.openstack_networking_network_v2.sharednet1.id
+  security_group_ids = [
+    data.openstack_networking_secgroup_v2.allow_ssh.id,
+    data.openstack_networking_secgroup_v2.allow_http_80.id
+  ]
 }
 
 resource "openstack_compute_instance_v2" "nodes" {
   for_each = var.nodes
 
-  name        = "${each.key}-recipe-${var.suffix}"
-  image_name  = "CC-Ubuntu24.04"
-  flavor_id   = var.reservation
-  key_pair    = var.key
+  name       = "${each.key}-recipe-${var.suffix}"
+  image_name = "CC-Ubuntu24.04"
+  flavor_id  = var.reservation_cpu
+  key_pair   = var.key
 
   network {
     port = openstack_networking_port_v2.sharednet1_ports[each.key].id
@@ -59,7 +58,7 @@ resource "openstack_compute_instance_v2" "nodes" {
 
 # GPU node — only created when reservation_gpu is provided
 resource "openstack_networking_port_v2" "private_net_ports_gpu" {
-  for_each              = var.reservation_gpu != "" ? var.gpu_nodes : {}
+  for_each              = var.create_gpu_node && var.reservation_gpu != "" ? var.gpu_nodes : {}
   name                  = "port-${each.key}-recipe-${var.suffix}"
   network_id            = openstack_networking_network_v2.private_net.id
   port_security_enabled = false
@@ -71,23 +70,22 @@ resource "openstack_networking_port_v2" "private_net_ports_gpu" {
 }
 
 resource "openstack_networking_port_v2" "sharednet1_ports_gpu" {
-  for_each   = var.reservation_gpu != "" ? var.gpu_nodes : {}
+  for_each   = var.create_gpu_node && var.reservation_gpu != "" ? var.gpu_nodes : {}
   name       = "sharednet1-${each.key}-recipe-${var.suffix}"
   network_id = data.openstack_networking_network_v2.sharednet1.id
   security_group_ids = [
     data.openstack_networking_secgroup_v2.allow_ssh.id,
-    data.openstack_networking_secgroup_v2.allow_8000.id,
     data.openstack_networking_secgroup_v2.allow_http_80.id
   ]
 }
 
 resource "openstack_compute_instance_v2" "gpu_node" {
-  for_each = var.reservation_gpu != "" ? var.gpu_nodes : {}
+  for_each = var.create_gpu_node && var.reservation_gpu != "" ? var.gpu_nodes : {}
 
-  name        = "${each.key}-recipe-${var.suffix}"
-  image_name  = "CC-Ubuntu24.04"
-  flavor_id   = var.reservation_gpu
-  key_pair    = var.key
+  name       = "${each.key}-recipe-${var.suffix}"
+  image_name = "CC-Ubuntu24.04"
+  flavor_id  = var.reservation_gpu
+  key_pair   = var.key
 
   network {
     port = openstack_networking_port_v2.sharednet1_ports_gpu[each.key].id
@@ -106,6 +104,6 @@ resource "openstack_compute_instance_v2" "gpu_node" {
 
 resource "openstack_networking_floatingip_v2" "floating_ip" {
   pool        = "public"
-  description = "Recipe scraper IP for ${var.suffix}"
+  description = "Recipe scraper IP for control plane node1 (${var.suffix})"
   port_id     = openstack_networking_port_v2.sharednet1_ports["node1"].id
 }
