@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: recipe-triton-analysis
+  namespace: {{ .Release.Namespace }}
+spec:
+  metrics:
+    - name: failure-rate
+      interval: 1m
+      count: 3
+      successCondition: result[0] <= 0.05
+      failureCondition: result[0] > 0.05
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus-svc:9090
+          query: |
+            sum(nv_inference_request_success)

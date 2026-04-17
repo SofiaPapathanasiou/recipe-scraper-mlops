@@ -1,0 +1,23 @@
+{{- if .Values.triton.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: recipe-triton-svc
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: {{ .Values.triton.service.type }}
+  selector:
+    app: recipe-triton
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: {{ .Values.triton.service.httpNodePort }}
+    - name: grpc
+      port: 8001
+      targetPort: 8001
+      nodePort: {{ .Values.triton.service.grpcNodePort }}
+    - name: metrics
+      port: 8002
+      targetPort: 8002
+{{- end }}
