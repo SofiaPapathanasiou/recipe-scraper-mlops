@@ -1,3 +1,21 @@
+variable "openstack_cloud" {
+  description = "Cloud entry name from clouds.yaml"
+  type        = string
+  default     = "openstack"
+}
+
+variable "openstack_region" {
+  description = "OpenStack region name"
+  type        = string
+  default     = "CHI@TACC"
+}
+
+variable "openstack_endpoint_type" {
+  description = "OpenStack endpoint interface to use"
+  type        = string
+  default     = "public"
+}
+
 variable "suffix" {
   description = "Suffix for resource names (use net ID)"
   type        = string
@@ -10,15 +28,28 @@ variable "key" {
   default     = "id_rsa_chameleon"
 }
 
-variable "reservation_cpu" {
-  description = "UUID of the reservation used for the CPU nodes (m1.xlarge)"
+variable "cpu_flavor_id" {
+  description = "Flavor UUID to use for CPU nodes"
   type        = string
+  default     = null
+}
+
+variable "reservation_cpu" {
+  description = "Deprecated: use cpu_flavor_id instead"
+  type        = string
+  default     = null
+}
+
+variable "gpu_flavor_id" {
+  description = "Flavor UUID to use for the GPU node"
+  type        = string
+  default     = null
 }
 
 variable "reservation_gpu" {
-  description = "UUID of the reservation used for the GPU node"
+  description = "Deprecated: use gpu_flavor_id instead"
   type        = string
-  default     = ""
+  default     = null
 }
 
 variable "create_gpu_node" {
@@ -39,8 +70,14 @@ variable "nodes" {
   }
 }
 
+variable "sharednet1_nodes" {
+  description = "CPU nodes that should attach to sharednet1; default keeps node1 as the public entrypoint"
+  type        = list(string)
+  default     = ["node1"]
+}
+
 variable "gpu_nodes" {
-  description = "GPU node brought up separately using reservation_gpu"
+  description = "GPU node brought up separately using gpu_flavor_id"
   type        = map(string)
   default = {
     "gpu-node" = "192.168.1.16"
