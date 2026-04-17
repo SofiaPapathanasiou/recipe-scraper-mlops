@@ -207,6 +207,7 @@ marimo/_lsp/
 __marimo__/
 training/checkpoints/
 devops/tf/kvm/clouds.yaml
+devops/tf/kvm/.terraform/
 
 # Large data files - stored in object store not git
 *.jsonl
