@@ -1,20 +1,8 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mlflow-pvc
-  namespace: recipe-scraper-platform
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mlflow
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   selector:
@@ -25,95 +13,97 @@ spec:
       labels:
         app: mlflow
     spec:
-      containers:
-      - name: mlflow
-        image: ghcr.io/mlflow/mlflow:v3.9.0
-        ports:
-        - containerPort: 8000
-        resources:
-          requests:
-            memory: "1Gi"
-            cpu: "200m"
-          limits:
-            memory: "2Gi"
-            cpu: "1"
+      initContainers:
+      - name: wait-for-postgres
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
         env:
         - name: POSTGRES_USER
           valueFrom:
             secretKeyRef:
-              name: postgres-credentials
+              name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
+              key: username
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
+              key: dbname
+        command:
+        - /bin/sh
+        - -c
+        - until pg_isready -h postgres -p {{ .Values.postgres.service.port }} -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+      containers:
+      - name: mlflow
+        image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
+        imagePullPolicy: {{ .Values.mlflow.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.mlflow.service.port }}
+        resources:
+{{ toYaml .Values.mlflow.resources | indent 10 }}
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
               key: username
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: postgres-credentials
+              name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
               key: password
         - name: POSTGRES_DB
           valueFrom:
             secretKeyRef:
-              name: postgres-credentials
+              name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
               key: dbname
         # --- Object storage config ---
         - name: MLFLOW_TRACKING_URI
-          value: "http://0.0.0.0:8000"
+          value: {{ .Values.mlflow.trackingUri | quote }}
         - name: MLFLOW_LOGGING_LEVEL
-          value: "ERROR"
+          value: {{ .Values.mlflow.loggingLevel | quote }}
         - name: MLFLOW_SERVER_ALLOWED_HOSTS
-          value: "*"
+          value: {{ .Values.mlflow.allowedHosts | quote }}
         - name: MLFLOW_S3_ENDPOINT_URL
-          value: "https://chi.tacc.chameleoncloud.org:7480"
+          value: {{ .Values.mlflow.s3.endpointUrl | quote }}
         - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
-              name: mlflow-s3-credentials
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
               key: AWS_ACCESS_KEY_ID
         - name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: mlflow-s3-credentials
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
               key: AWS_SECRET_ACCESS_KEY
         - name: BUCKET_NAME
           valueFrom:
             secretKeyRef:
-              name: mlflow-s3-credentials
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
               key: BUCKET_NAME
         command: ["/bin/sh", "-c"]
         args:
         - >
           pip install psycopg2-binary boto3 &&
           mlflow server
-          --backend-store-uri 
-"postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}"
+          --backend-store-uri
+          "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:{{ .Values.postgres.service.port }}/${POSTGRES_DB}"
           --artifacts-destination "s3://${BUCKET_NAME}/"
           --serve-artifacts
           --host 0.0.0.0
-          --port 8000
-          --app-name basic-auth ||
-          mlflow server
-          --backend-store-uri 
-"postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}"
-          --artifacts-destination "s3://${BUCKET_NAME}/"
-          --serve-artifacts
-          --host 0.0.0.0
-          --port 8000
-        volumeMounts:
-        - name: mlflow-storage
-          mountPath: /mlflow
-      volumes:
-      - name: mlflow-storage
-        persistentVolumeClaim:
-          claimName: mlflow-pvc
+          --port {{ .Values.mlflow.service.port }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mlflow
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     app: mlflow
-  type: NodePort
+  type: {{ .Values.mlflow.service.type }}
   ports:
-    - port: 8000
-      targetPort: 8000
-      nodePort: 30800
+    - port: {{ .Values.mlflow.service.port }}
+      targetPort: {{ .Values.mlflow.service.port }}
+      {{- if eq .Values.mlflow.service.type "NodePort" }}
+      nodePort: {{ .Values.mlflow.service.nodePort }}
+      {{- end }}

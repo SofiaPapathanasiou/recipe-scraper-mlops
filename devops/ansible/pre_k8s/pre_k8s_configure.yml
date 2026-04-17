@@ -1,50 +1,438 @@
 ---
-- name: Disable and Mask firewalld
+- name: Prepare nodes for Kubespray
   hosts: all
-  become: yes  # Run tasks as root
-
+  become: yes
+  vars:
+    node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"
+    private_cidr: 192.168.1.0/24
+    ubuntu_apt_mirror: http://mirror.math.princeton.edu/pub/ubuntu
   tasks:
-    - name: Stop firewalld service
-      systemd:
+    - name: Wait for cloud-init to finish when available
+      ansible.builtin.shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          cloud-init status --wait
+        fi
+      args:
+        executable: /bin/bash
+      register: cloud_init_status
+      changed_when: false
+      failed_when: >
+        (cloud_init_status.rc not in [0, 2]) or
+        (cloud_init_status.rc == 2 and 'status: done' not in cloud_init_status.stdout)
+
+    - name: Reset NIC offloads on private IPv4 interfaces
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+
+          changed=0
+          while IFS= read -r iface; do
+            [[ -n "${iface}" ]] || continue
+
+            if ! ethtool -k "${iface}" >/dev/null 2>&1; then
+              echo "Skipping ${iface}: ethtool does not support it"
+              continue
+            fi
+
+            echo "Resetting offloads on ${iface}"
+            ethtool -K "${iface}" tso off gso off gro off rx off tx off || true
+            changed=1
+          done < <(
+            ip -o -4 addr show up primary scope global \
+              | awk '
+                  {
+                    split($4, cidr, "/");
+                    ip = cidr[1];
+                    if (ip ~ /^10\./ || ip ~ /^192\.168\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./) {
+                      print $2;
+                    }
+                  }
+                ' \
+              | sort -u
+          )
+
+          if [[ "${changed}" -eq 0 ]]; then
+            echo "No private IPv4 interfaces found"
+            exit 0
+          fi
+
+          if [[ "${changed}" -eq 1 ]]; then
+            echo "NIC offloads reset on private interfaces"
+          fi
+      args:
+        executable: /bin/bash
+      register: nic_offload_reset
+      changed_when: "'NIC offloads reset on private interfaces' in nic_offload_reset.stdout"
+
+    - name: Configure alternate Ubuntu apt mirror for Chameleon Cloud
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/ubuntu.sources
+        regexp: 'http://(?:security|archive)\.ubuntu\.com/ubuntu'
+        replace: "{{ ubuntu_apt_mirror }}"
+      when: ansible_facts["distribution"] == "Ubuntu"
+
+    - name: Verify Ubuntu apt mirror URIs
+      ansible.builtin.command: grep URIs /etc/apt/sources.list.d/ubuntu.sources
+      register: ubuntu_sources_uris
+      changed_when: false
+      when: ansible_facts["distribution"] == "Ubuntu"
+
+    - name: Assert Ubuntu apt mirror was updated
+      ansible.builtin.assert:
+        that:
+          - ubuntu_apt_mirror in ubuntu_sources_uris.stdout
+        fail_msg: Ubuntu apt mirror was not updated in /etc/apt/sources.list.d/ubuntu.sources.
+      when: ansible_facts["distribution"] == "Ubuntu"
+
+    - name: Stop background apt maintenance services on Debian hosts
+      ansible.builtin.shell: |
+        systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Terminate apt and dpkg lock owners on Debian hosts
+      ansible.builtin.shell: |
+        set -o pipefail
+
+        lock_files=(
+          /var/lib/apt/lists/lock
+          /var/lib/dpkg/lock
+          /var/lib/dpkg/lock-frontend
+          /var/cache/apt/archives/lock
+        )
+
+        pids="$(fuser "${lock_files[@]}" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+
+        if [[ -z "${pids}" ]]; then
+          echo "No apt/dpkg lock owners found on {{ inventory_hostname }}"
+          exit 0
+        fi
+
+        echo "Terminating apt/dpkg lock owners on {{ inventory_hostname }}: ${pids//$'\n'/ }"
+        kill ${pids} 2>/dev/null || true
+        sleep 5
+
+        remaining_pids="$(ps -o pid= -p $(echo "${pids}" | tr '\n' ' ') 2>/dev/null | tr -d ' ' || true)"
+        if [[ -n "${remaining_pids}" ]]; then
+          echo "Force killing remaining lock owners on {{ inventory_hostname }}: ${remaining_pids//$'\n'/ }"
+          kill -9 ${remaining_pids} 2>/dev/null || true
+        fi
+      args:
+        executable: /bin/bash
+      register: apt_lock_owner_cleanup
+      changed_when: "'Terminating apt/dpkg lock owners' in apt_lock_owner_cleanup.stdout"
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Remove stale apt and dpkg lock files on Debian hosts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/apt/lists/lock
+        - /var/lib/dpkg/lock
+        - /var/lib/dpkg/lock-frontend
+        - /var/cache/apt/archives/lock
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Repair dpkg state on Debian hosts
+      ansible.builtin.command: dpkg --configure -a
+      changed_when: false
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Check whether apt and dpkg locks are clear on Debian hosts
+      ansible.builtin.shell: |
+        set -o pipefail
+
+        lock_files=(
+          /var/lib/apt/lists/lock
+          /var/lib/dpkg/lock
+          /var/lib/dpkg/lock-frontend
+          /var/cache/apt/archives/lock
+        )
+
+        existing_lock_files=()
+        for lock_file in "${lock_files[@]}"; do
+          if [[ -e "${lock_file}" ]]; then
+            existing_lock_files+=("${lock_file}")
+          fi
+        done
+
+        if [[ -z "${existing_lock_files[*]}" ]]; then
+          echo "[$(date -Is)] apt/dpkg locks clear on {{ inventory_hostname }}"
+          exit 0
+        fi
+
+        lock_pids="$(fuser "${existing_lock_files[@]}" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+
+        if [[ -n "${lock_pids}" ]]; then
+          echo "[$(date -Is)] apt/dpkg locks still held on {{ inventory_hostname }}"
+          echo "Processes holding locks: ${lock_pids//$'\n'/ }"
+          ps -ef | grep -E '[a]pt|[d]pkg|[u]nattended' || true
+          exit 1
+        fi
+
+        echo "[$(date -Is)] apt/dpkg locks clear on {{ inventory_hostname }}"
+      args:
+        executable: /bin/bash
+      register: apt_lock_check
+      until: apt_lock_check.rc == 0
+      retries: 180
+      delay: 5
+      changed_when: false
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Refresh apt cache after Ubuntu mirror change
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "[$(date -Is)] starting apt-get update on {{ inventory_hostname }}"
+
+        if ! timeout 600 apt-get update \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          -o DPkg::Lock::Timeout=900; then
+          rc=$?
+          echo "[$(date -Is)] apt-get update failed on {{ inventory_hostname }} with rc=${rc}"
+          echo "--- ubuntu.sources ---"
+          cat /etc/apt/sources.list.d/ubuntu.sources || true
+          echo "--- resolver ---"
+          resolvectl status || systemd-resolve --status || true
+          echo "--- routes ---"
+          ip route || true
+          echo "--- mirror check ---"
+          curl -I --max-time 20 "{{ ubuntu_apt_mirror }}/dists/" || true
+          exit "${rc}"
+        fi
+
+        echo "[$(date -Is)] finished apt-get update on {{ inventory_hostname }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ansible_facts["distribution"] == "Ubuntu"
+
+    - name: Repair missing package dependencies on Debian hosts
+      ansible.builtin.command: apt-get -f install -y
+      changed_when: false
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Stop and disable firewalld when present
+      ansible.builtin.systemd:
         name: firewalld
         state: stopped
         enabled: no
-
-    - name: Mask firewalld service
-      systemd:
-        name: firewalld
         masked: yes
+      failed_when: false
 
-- name: Set up insecure registry for Docker
-  hosts: node1,node2,node3
+- name: Configure node1 as the private subnet NAT gateway
+  hosts: node1
   become: yes
-
   vars:
-    insecure_registry: "registry.kube-system.svc.cluster.local:5000"
-
+    node1_private_ip: "{{ ansible_host }}"
+    private_cidr: 192.168.1.0/24
   tasks:
+    - name: Verify iptables is available on node1
+      ansible.builtin.command: iptables --version
+      changed_when: false
 
-    - name: Ensure /etc/docker directory exists
-      file:
-        path: /etc/docker
-        state: directory
-        mode: '0755'
+    - name: Discover the public uplink interface on node1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route show default | awk 'NR==1 {print $5}'
+      args:
+        executable: /bin/bash
+      register: node1_public_if
+      changed_when: false
 
-    - name: Create /etc/docker/daemon.json if not exists
-      file:
-        path: /etc/docker/daemon.json
-        state: touch
-        mode: '0644'
+    - name: Discover the private interface on node1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route get {{ hostvars['node2']['ansible_host'] }} | awk '/dev/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+      args:
+        executable: /bin/bash
+      register: node1_private_if
+      changed_when: false
 
-    - name: Configure Docker daemon.json for insecure registry
-      copy:
-        dest: /etc/docker/daemon.json
-        content: |
-          {
-            "registry-mirrors": ["http://kvm-dyn-129-114-25-246.tacc.chameleoncloud.org:5000"],
-            "insecure-registries": ["{{ insecure_registry }}", "kvm-dyn-129-114-25-246.tacc.chameleoncloud.org:5000"]
-          }
+    - name: Fail when node1 interface discovery fails
+      ansible.builtin.assert:
+        that:
+          - node1_public_if.stdout | trim | length > 0
+          - node1_private_if.stdout | trim | length > 0
+        fail_msg: Unable to determine node1 public/private interfaces for NAT setup.
+
+    - name: Persist IPv4 forwarding on node1
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-node1-nat.conf
         owner: root
         group: root
-        mode: '0644'
+        mode: "0644"
+        content: |
+          net.ipv4.ip_forward = 1
 
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: Install the node1 NAT helper script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/configure-node1-nat.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PUBLIC_IF="{{ node1_public_if.stdout | trim }}"
+          PRIVATE_IF="{{ node1_private_if.stdout | trim }}"
+          PRIVATE_CIDR="{{ private_cidr }}"
+
+          sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+          iptables -t nat -C POSTROUTING -s "${PRIVATE_CIDR}" -o "${PUBLIC_IF}" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "${PRIVATE_CIDR}" -o "${PUBLIC_IF}" -j MASQUERADE
+
+          iptables -C FORWARD -i "${PRIVATE_IF}" -o "${PUBLIC_IF}" -s "${PRIVATE_CIDR}" -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -i "${PRIVATE_IF}" -o "${PUBLIC_IF}" -s "${PRIVATE_CIDR}" -j ACCEPT
+
+          iptables -C FORWARD -i "${PUBLIC_IF}" -o "${PRIVATE_IF}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -i "${PUBLIC_IF}" -o "${PRIVATE_IF}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+    - name: Install the node1 NAT systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node1-nat.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Configure NAT for private cluster nodes
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/configure-node1-nat.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start the node1 NAT service
+      ansible.builtin.systemd:
+        name: node1-nat.service
+        daemon_reload: yes
+        enabled: yes
+        state: restarted
+
+    - name: Ensure systemd-resolved drop-in directory exists on node1
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Expose node1 systemd-resolved on the private subnet
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/99-private-dns-listener.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Resolve]
+          DNS=129.114.97.1 129.114.97.2 1.1.1.1 8.8.8.8
+          DNSStubListenerExtra={{ node1_private_ip }}
+
+    - name: Restart systemd-resolved on node1
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+
+- name: Route private nodes through node1 for outbound package access
+  hosts: node2:node3:node4:node5
+  become: yes
+  vars:
+    node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"
+  tasks:
+    - name: Discover the private interface on each private node
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route get {{ node1_private_ip }} | awk '/dev/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+      args:
+        executable: /bin/bash
+      register: private_node_if
+      changed_when: false
+
+    - name: Fail when private interface discovery fails
+      ansible.builtin.assert:
+        that:
+          - private_node_if.stdout | trim | length > 0
+        fail_msg: Unable to determine the private interface for {{ inventory_hostname }}.
+
+    - name: Install the private-route helper script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/configure-private-default-route.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PRIVATE_IF="{{ private_node_if.stdout | trim }}"
+          GATEWAY_IP="{{ node1_private_ip }}"
+
+          ip route replace default via "${GATEWAY_IP}" dev "${PRIVATE_IF}"
+
+    - name: Install the private-route systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/private-default-route.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Configure default route via node1
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/configure-private-default-route.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start the private-route service
+      ansible.builtin.systemd:
+        name: private-default-route.service
+        daemon_reload: yes
+        enabled: yes
+        state: restarted
+
+    - name: Ensure systemd-resolved drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Point systemd-resolved at node1 for DNS
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/99-node1-dns.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Resolve]
+          DNS={{ node1_private_ip }}
+          Domains=~.
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted

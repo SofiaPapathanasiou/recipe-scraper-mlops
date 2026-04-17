@@ -1,27 +1,16 @@
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: data-pv
-spec:
-  capacity:
-    storage: 50Gi
-  accessModes:
-    - ReadWriteMany
-  hostPath:
-    path: /home/cc/recipe-scraper-mlops/data
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
----
+{{- if .Values.data.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: data-pvc
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   accessModes:
-    - ReadWriteMany
+    - {{ .Values.data.persistence.accessMode }}
   resources:
     requests:
-      storage: 50Gi
-  volumeName: data-pv
-  storageClassName: ""
+      storage: {{ .Values.data.persistence.size }}
+  {{- if .Values.data.persistence.storageClass }}
+  storageClassName: {{ .Values.data.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
