@@ -1,4 +1,6 @@
+{{- if .Values.namespace.create }}
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: recipe-scraper-platform
+  name: {{ .Release.Namespace }}
+{{- end }}

@@ -1,27 +1,45 @@
-apiVersion: v1
-kind: PersistentVolume
+{{- if .Values.trainingJob.enabled }}
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: training-pv
+  name: training-job
+  namespace: {{ .Release.Namespace }}
 spec:
-  capacity:
-    storage: 100Gi
-  accessModes:
-    - ReadWriteMany
-  hostPath:
-    path: /home/cc/recipe-scraper-mlops/training
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: training-pvc
-  namespace: recipe-scraper-platform
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 100Gi
-  volumeName: training-pv
-  storageClassName: ""
+  backoffLimit: {{ .Values.trainingJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app: training-job
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-mlflow
+          image: "{{ .Values.trainingJob.image.repository }}:{{ .Values.trainingJob.image.tag }}"
+          imagePullPolicy: {{ .Values.trainingJob.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - until curl -sf "http://mlflow:{{ .Values.mlflow.service.port }}/" >/dev/null; do sleep 2; done
+      containers:
+        - name: training
+          image: "{{ .Values.trainingJob.image.repository }}:{{ .Values.trainingJob.image.tag }}"
+          imagePullPolicy: {{ .Values.trainingJob.image.pullPolicy }}
+          workingDir: /app
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+            - name: TRAIN_SCRIPT
+              value: {{ .Values.trainingJob.env.trainScript | quote }}
+            - name: TRAIN_CONFIG
+              value: {{ .Values.trainingJob.env.trainConfig | quote }}
+            - name: TRAIN_MODE
+              value: {{ .Values.trainingJob.env.trainMode | quote }}
+            - name: ACCELERATE_CONFIG_FILE
+              value: {{ .Values.trainingJob.env.accelerateConfigFile | quote }}
+            - name: NUM_PROCESSES
+              value: {{ .Values.trainingJob.env.numProcesses | quote }}
+            - name: TRAIN_EXTRA_ARGS
+              value: {{ .Values.trainingJob.env.extraArgs | quote }}
+          resources:
+{{ toYaml .Values.trainingJob.resources | indent 12 }}
+{{- end }}
