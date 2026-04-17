@@ -10,10 +10,6 @@ data "openstack_networking_secgroup_v2" "allow_ssh" {
   name = "allow-ssh"
 }
 
-data "openstack_networking_secgroup_v2" "allow_8000" {
-  name = "allow-8000"
-}
-
 data "openstack_networking_secgroup_v2" "allow_http_80" {
   name = "allow-http-80"
 }
