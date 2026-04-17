@@ -58,10 +58,10 @@ metadata:
   name: mealie
   namespace: recipe-scraper-mealie
 spec:
+  type: NodePort
   selector:
     app: mealie
   ports:
   - port: 80
     targetPort: 9000
-  externalIPs:
-  - 129.114.24.214
+    nodePort: 30900
