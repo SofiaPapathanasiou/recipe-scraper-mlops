@@ -2,6 +2,9 @@
 - name: Prepare nodes for Kubespray
   hosts: all
   become: yes
+  vars:
+    node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"
+    private_cidr: 192.168.1.0/24
   tasks:
     - name: Stop and disable firewalld when present
       ansible.builtin.systemd:
@@ -10,3 +13,215 @@
         enabled: no
         masked: yes
       failed_when: false
+
+- name: Configure node1 as the private subnet NAT gateway
+  hosts: node1
+  become: yes
+  vars:
+    node1_private_ip: "{{ ansible_host }}"
+    private_cidr: 192.168.1.0/24
+  tasks:
+    - name: Verify iptables is available on node1
+      ansible.builtin.command: iptables --version
+      changed_when: false
+
+    - name: Discover the public uplink interface on node1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route show default | awk 'NR==1 {print $5}'
+      args:
+        executable: /bin/bash
+      register: node1_public_if
+      changed_when: false
+
+    - name: Discover the private interface on node1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route get {{ hostvars['node2']['ansible_host'] }} | awk '/dev/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+      args:
+        executable: /bin/bash
+      register: node1_private_if
+      changed_when: false
+
+    - name: Fail when node1 interface discovery fails
+      ansible.builtin.assert:
+        that:
+          - node1_public_if.stdout | trim | length > 0
+          - node1_private_if.stdout | trim | length > 0
+        fail_msg: Unable to determine node1 public/private interfaces for NAT setup.
+
+    - name: Persist IPv4 forwarding on node1
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-node1-nat.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          net.ipv4.ip_forward = 1
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: Install the node1 NAT helper script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/configure-node1-nat.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PUBLIC_IF="{{ node1_public_if.stdout | trim }}"
+          PRIVATE_IF="{{ node1_private_if.stdout | trim }}"
+          PRIVATE_CIDR="{{ private_cidr }}"
+
+          sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+          iptables -t nat -C POSTROUTING -s "${PRIVATE_CIDR}" -o "${PUBLIC_IF}" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "${PRIVATE_CIDR}" -o "${PUBLIC_IF}" -j MASQUERADE
+
+          iptables -C FORWARD -i "${PRIVATE_IF}" -o "${PUBLIC_IF}" -s "${PRIVATE_CIDR}" -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -i "${PRIVATE_IF}" -o "${PUBLIC_IF}" -s "${PRIVATE_CIDR}" -j ACCEPT
+
+          iptables -C FORWARD -i "${PUBLIC_IF}" -o "${PRIVATE_IF}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -i "${PUBLIC_IF}" -o "${PRIVATE_IF}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+    - name: Install the node1 NAT systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node1-nat.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Configure NAT for private cluster nodes
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/configure-node1-nat.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start the node1 NAT service
+      ansible.builtin.systemd:
+        name: node1-nat.service
+        daemon_reload: yes
+        enabled: yes
+        state: restarted
+
+    - name: Ensure systemd-resolved drop-in directory exists on node1
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Expose node1 systemd-resolved on the private subnet
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/99-private-dns-listener.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Resolve]
+          DNS=129.114.97.1 129.114.97.2 1.1.1.1 8.8.8.8
+          DNSStubListenerExtra={{ node1_private_ip }}
+
+    - name: Restart systemd-resolved on node1
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+
+- name: Route private nodes through node1 for outbound package access
+  hosts: node2:node3:node4:node5
+  become: yes
+  vars:
+    node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"
+  tasks:
+    - name: Discover the private interface on each private node
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip route get {{ node1_private_ip }} | awk '/dev/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+      args:
+        executable: /bin/bash
+      register: private_node_if
+      changed_when: false
+
+    - name: Fail when private interface discovery fails
+      ansible.builtin.assert:
+        that:
+          - private_node_if.stdout | trim | length > 0
+        fail_msg: Unable to determine the private interface for {{ inventory_hostname }}.
+
+    - name: Install the private-route helper script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/configure-private-default-route.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PRIVATE_IF="{{ private_node_if.stdout | trim }}"
+          GATEWAY_IP="{{ node1_private_ip }}"
+
+          ip route replace default via "${GATEWAY_IP}" dev "${PRIVATE_IF}"
+
+    - name: Install the private-route systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/private-default-route.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Configure default route via node1
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/configure-private-default-route.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start the private-route service
+      ansible.builtin.systemd:
+        name: private-default-route.service
+        daemon_reload: yes
+        enabled: yes
+        state: restarted
+
+    - name: Ensure systemd-resolved drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Point systemd-resolved at node1 for DNS
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/99-node1-dns.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Resolve]
+          DNS={{ node1_private_ip }}
+          Domains=~.
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
