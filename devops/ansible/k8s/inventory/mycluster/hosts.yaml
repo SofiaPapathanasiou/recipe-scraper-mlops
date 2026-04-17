@@ -1,4 +1,6 @@
 all:
+  vars:
+    ansible_ssh_private_key_file: /home/cc/.ssh/id_rsa_chameleon_ansible
   hosts:
     node1:
       ansible_host: 192.168.1.11
@@ -26,10 +28,10 @@ all:
       ip: 192.168.1.15
       access_ip: 192.168.1.15
     gpu-node:
-      ansible_host: 10.56.2.138
+      ansible_host: 192.168.1.41
       ansible_user: cc
-      ip: 192.168.1.16
-      access_ip: 192.168.1.16
+      ip: 192.168.1.41
+      access_ip: 192.168.1.41
   children:
     kube_control_plane:
       hosts:
