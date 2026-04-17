@@ -83,3 +83,92 @@
           - argo
           - -f
           - https://github.com/argoproj/argo-workflows/releases/download/v3.6.5/quick-start-minimal.yaml
+
+- name: Bootstrap NVIDIA GPU support
+  hosts: node1
+  become: yes
+  vars:
+    gpu_plugin_manifest: /tmp/nvidia-gpu-device-plugin.yaml
+    gpu_smoke_manifest: /tmp/gpu-smoke-pod.yaml
+  tasks:
+    - name: Copy NVIDIA device plugin manifest
+      ansible.builtin.copy:
+        src: files/nvidia-gpu-device-plugin.yaml
+        dest: "{{ gpu_plugin_manifest }}"
+        mode: "0644"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Apply NVIDIA device plugin manifest
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ gpu_plugin_manifest }}"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Wait for NVIDIA device plugin rollout
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - kube-system
+          - rollout
+          - status
+          - daemonset/nvidia-gpu-device-plugin
+          - --timeout=180s
+      changed_when: false
+      when: "'gpu-node' in groups['all']"
+
+    - name: Copy GPU smoke test manifest
+      ansible.builtin.copy:
+        src: files/gpu-smoke-pod.yaml
+        dest: "{{ gpu_smoke_manifest }}"
+        mode: "0644"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Run GPU smoke pod
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ gpu_smoke_manifest }}"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Wait for GPU smoke pod to complete
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - wait
+          - --for=jsonpath={.status.phase}=Succeeded
+          - pod/gpu-smoke
+          - --timeout=180s
+      changed_when: false
+      when: "'gpu-node' in groups['all']"
+
+    - name: Show GPU smoke pod logs
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - logs
+          - gpu-smoke
+      register: gpu_smoke_logs
+      changed_when: false
+      when: "'gpu-node' in groups['all']"
+
+    - name: Display GPU smoke pod logs
+      ansible.builtin.debug:
+        msg: "{{ gpu_smoke_logs.stdout_lines }}"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Clean up GPU smoke pod
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - pod
+          - gpu-smoke
+          - --ignore-not-found=true
+      changed_when: false
+      when: "'gpu-node' in groups['all']"

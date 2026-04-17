@@ -1,6 +1,8 @@
 ---
 # Keep the Kubespray inventory focused on what this repo actively uses.
 container_manager: containerd
+download_run_once: true
+download_delegate: node1
 
 helm_enabled: true
 metrics_server_enabled: true
