@@ -25,6 +25,7 @@ spec:
               set -ex
 
               pip install --no-cache-dir python-swiftclient python-keystoneclient
+              pip install --target=/python-packages torch==2.4.0 torchvision==0.19.0 transformers sentencepiece
 
               source /openrc/openrc
 
@@ -57,6 +58,8 @@ spec:
             - name: openrc
               mountPath: /openrc
               readOnly: true
+            - name: python-packages
+              mountPath: /python-packages
 
       containers:
         - name: triton
@@ -70,6 +73,9 @@ spec:
               --allow-http=true
               --allow-grpc=true
               --allow-metrics=true
+          env:
+            - name: PYTHONPATH
+              value: /python-packages
           ports:
             - name: http
               containerPort: 8000
@@ -94,9 +100,13 @@ spec:
           volumeMounts:
             - name: triton-models
               mountPath: /models
+            - name: python-packages        
+              mountPath: /python-packages
 
       volumes:
         - name: triton-models
+          emptyDir: {}
+        - name: python-packages
           emptyDir: {}
         - name: model-src
           configMap:
