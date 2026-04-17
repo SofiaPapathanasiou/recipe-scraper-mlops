@@ -1,28 +1,40 @@
+{{- if .Values.data.driftMonitor.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: drift-monitor
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
-  schedule: "0 * * * *"
+  schedule: {{ .Values.data.driftMonitor.schedule | quote }}
   jobTemplate:
     spec:
       template:
         spec:
-          containers:
-          - name: drift-monitor
-            image: python:3.10-slim
-            command:
-            - /bin/bash
-            - -c
-            - |
-              pip install -q && \
-              python3 /data/scripts/06_monitor_drift.py
-            volumeMounts:
-            - name: data
-              mountPath: /data
-          volumes:
-          - name: data
-            persistentVolumeClaim:
-              claimName: data-pvc
           restartPolicy: OnFailure
+          containers:
+            - name: drift-monitor
+              image: "{{ .Values.data.jobs.image.repository }}:{{ .Values.data.jobs.image.tag }}"
+              imagePullPolicy: {{ .Values.data.jobs.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - -c
+                - python /app/scripts/06_monitor_drift.py
+              env:
+                - name: DATA_ROOT
+                  value: {{ .Values.data.jobs.mountPath | quote }}
+                - name: PYTHONPATH
+                  value: /app
+              resources:
+{{ toYaml .Values.data.driftMonitor.resources | indent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: {{ .Values.data.jobs.mountPath | quote }}
+          volumes:
+            - name: data
+              {{- if .Values.data.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: data-pvc
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+{{- end }}

@@ -1,21 +1,26 @@
+{{- if .Values.postgres.persistence.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.postgres.persistence.accessMode }}
   resources:
     requests:
-      storage: 10Gi
+      storage: {{ .Values.postgres.persistence.size }}
+  {{- if .Values.postgres.persistence.storageClass }}
+  storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   selector:
@@ -28,41 +33,70 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:18
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
           env:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
                   key: username
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
                   key: password
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ default "postgres-credentials" .Values.postgres.auth.existingSecret }}
                   key: dbname
           ports:
-            - containerPort: 5432
+            - containerPort: {{ .Values.postgres.service.port }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            failureThreshold: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 15
+            periodSeconds: 20
           volumeMounts:
             - name: postgres-storage
-              mountPath: /var/lib/postgresql
+              mountPath: /var/lib/postgresql/data
       volumes:
         - name: postgres-storage
+          {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
             claimName: postgres-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: recipe-scraper-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     app: postgres
   ports:
-    - port: 5432
-      targetPort: 5432
+    - port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.service.port }}
