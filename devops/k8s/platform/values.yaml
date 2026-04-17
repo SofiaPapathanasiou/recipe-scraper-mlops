@@ -1,3 +1,101 @@
-mlflow:
-  externalIP: "0.0.0.0"
+namespace:
+  create: true
 
+postgres:
+  image:
+    repository: postgres
+    tag: "18"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+  auth:
+    existingSecret: ""
+    username: user
+    password: password
+    database: mlflowdb
+
+mlflow:
+  image:
+    repository: ghcr.io/mlflow/mlflow
+    tag: "v3.9.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30800
+  trackingUri: "http://0.0.0.0:8000"
+  loggingLevel: "ERROR"
+  allowedHosts: "*"
+  s3:
+    endpointUrl: "https://chi.tacc.chameleoncloud.org:7480"
+    existingSecret: ""
+    accessKeyId: ""
+    secretAccessKey: ""
+    bucketName: ""
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "200m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+data:
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+  jobs:
+    image:
+      repository: recipe-scraper-data
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    mountPath: /data
+  trainingQuality:
+    enabled: true
+    schedule: "0 0 * * 1,4"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+  driftMonitor:
+    enabled: true
+    schedule: "0 * * * *"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+trainingJob:
+  enabled: false
+  backoffLimit: 0
+  image:
+    repository: recipe-scraper-training
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  env:
+    trainScript: /app/train.py
+    trainConfig: /app/config.yaml
+    trainMode: train
+    accelerateConfigFile: /app/accelerate_config.yaml
+    numProcesses: "1"
+    extraArgs: ""
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
+      memory: "6Gi"
+      cpu: "2"
