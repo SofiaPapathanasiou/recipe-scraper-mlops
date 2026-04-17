@@ -8,3 +8,15 @@ all:
     node2:
       ansible_host: 192.168.1.12
       ansible_user: cc
+    node3:
+      ansible_host: 192.168.1.13
+      ansible_user: cc
+    node4:
+      ansible_host: 192.168.1.14
+      ansible_user: cc
+    node5:
+      ansible_host: 192.168.1.15
+      ansible_user: cc
+    gpu-node:
+      ansible_host: 10.56.2.138
+      ansible_user: cc
