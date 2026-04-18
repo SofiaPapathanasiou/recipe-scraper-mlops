@@ -10,12 +10,14 @@ import sys
 import subprocess
 from datetime import datetime
 
+sys.path.insert(0, '/app')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from quality.checks import check_inference_drift, save_report
 
-PROCESSED_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/processed")
-INFERENCE_LOG = os.path.expanduser("~/recipe-scraper-mlops/data/inference_log.jsonl")
-REPORT_DIR = os.path.expanduser("~/recipe-scraper-mlops/data/reports/drift")
+DATA_ROOT = os.environ.get("DATA_ROOT", os.path.expanduser("~/recipe-scraper-mlops/data"))
+PROCESSED_DIR = os.path.join(DATA_ROOT, "processed")
+INFERENCE_LOG = os.path.join(DATA_ROOT, "inference_log.jsonl")
+REPORT_DIR = os.path.join(DATA_ROOT, "reports/drift")
 
 def upload_report_to_swift(local_path, object_name):
     subprocess.run([
