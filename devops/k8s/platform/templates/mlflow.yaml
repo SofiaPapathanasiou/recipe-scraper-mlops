@@ -13,6 +13,8 @@ spec:
       labels:
         app: mlflow
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: node4
       initContainers:
       - name: wait-for-postgres
         image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
