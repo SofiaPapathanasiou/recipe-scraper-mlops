@@ -11,6 +11,14 @@ spec:
       labels:
         app: training-job
     spec:
+{{- with .Values.trainingJob.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.trainingJob.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
       restartPolicy: Never
       initContainers:
         - name: wait-for-mlflow
@@ -28,18 +36,60 @@ spec:
           env:
             - name: MLFLOW_TRACKING_URI
               value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+            - name: DATA_DIR
+              value: {{ .Values.trainingJob.env.dataDir | quote }}
+{{- with .Values.trainingJob.env.trainJsonlPath }}
+            - name: TRAIN_JSONL_PATH
+              value: {{ . | quote }}
+{{- end }}
+{{- with .Values.trainingJob.env.evalJsonlPath }}
+            - name: EVAL_JSONL_PATH
+              value: {{ . | quote }}
+{{- end }}
             - name: TRAIN_SCRIPT
               value: {{ .Values.trainingJob.env.trainScript | quote }}
             - name: TRAIN_CONFIG
               value: {{ .Values.trainingJob.env.trainConfig | quote }}
             - name: TRAIN_MODE
               value: {{ .Values.trainingJob.env.trainMode | quote }}
-            - name: ACCELERATE_CONFIG_FILE
-              value: {{ .Values.trainingJob.env.accelerateConfigFile | quote }}
+            - name: TRAINING_CHECKPOINT_DIR
+              value: {{ .Values.trainingJob.env.checkpointDir | quote }}
+            - name: HF_CACHE_DIR
+              value: {{ .Values.trainingJob.env.hfCacheDir | quote }}
             - name: NUM_PROCESSES
               value: {{ .Values.trainingJob.env.numProcesses | quote }}
             - name: TRAIN_EXTRA_ARGS
               value: {{ .Values.trainingJob.env.extraArgs | quote }}
+{{- if .Values.trainingJob.storage.enabled }}
+{{- $mountPaths := list }}
+{{- with .Values.trainingJob.storage.mountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.datasetMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.checkpointMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.hfCacheMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+          volumeMounts:
+{{- range $mountPath := uniq $mountPaths }}
+            - name: training-data
+              mountPath: {{ $mountPath | quote }}
+{{- end }}
+{{- end }}
           resources:
 {{ toYaml .Values.trainingJob.resources | indent 12 }}
+{{- if .Values.trainingJob.storage.enabled }}
+      volumes:
+        - name: training-data
+          {{- if .Values.data.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
 {{- end }}

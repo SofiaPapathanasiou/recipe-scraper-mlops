@@ -81,24 +81,46 @@ data:
 trainingJob:
   enabled: false
   backoffLimit: 0
+  nodeSelector:
+    kubernetes.io/hostname: gpu-node
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   image:
     repository: recipe-scraper-training
     tag: "latest"
     pullPolicy: IfNotPresent
+  storage:
+    enabled: true
+    # Legacy catch-all root for datasets and training outputs.
+    # Prefer the split mount paths below when those locations need to diverge.
+    mountPath: /data
+    # Optional explicit mount points for the shared training volume.
+    # When set, the chart mounts the same volume at each distinct path.
+    datasetMountPath: /data
+    checkpointMountPath: /data/checkpoints
+    hfCacheMountPath: /data/checkpoints/huggingface-cache
   env:
     trainScript: /app/train.py
-    trainConfig: /app/config.yaml
+    trainConfig: /app/config/config.yaml
     trainMode: train
-    accelerateConfigFile: /app/accelerate_config.yaml
+    dataDir: /data
+    trainJsonlPath: ""
+    evalJsonlPath: ""
+    checkpointDir: /data/checkpoints/recipe-correction
+    hfCacheDir: /data/checkpoints/huggingface-cache
     numProcesses: "1"
     extraArgs: ""
   resources:
     requests:
       memory: "2Gi"
       cpu: "500m"
+      nvidia.com/gpu: 1
     limits:
       memory: "6Gi"
       cpu: "2"
+      nvidia.com/gpu: 1
 
 triton:
   enabled: true

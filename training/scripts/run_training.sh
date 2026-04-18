@@ -7,11 +7,6 @@ TRAIN_MODE="${TRAIN_MODE:-train}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 
 resolve_accelerate_config_file() {
-    if [ -n "${ACCELERATE_CONFIG_FILE:-}" ]; then
-        printf "%s\n" "${ACCELERATE_CONFIG_FILE}"
-        return
-    fi
-
     /opt/venv/bin/python - "${TRAIN_CONFIG}" <<'PY'
 import sys
 import tempfile
@@ -39,14 +34,13 @@ if isinstance(accelerate_cfg, dict) and accelerate_cfg:
     print(tmp.name)
 else:
     raise SystemExit(
-        "TRAIN_CONFIG must define a non-empty 'accelerate' mapping when "
-        "ACCELERATE_CONFIG_FILE is not set."
+        "TRAIN_CONFIG must define a non-empty 'accelerate' mapping for Accelerate launches."
     )
 PY
 }
 
 if [ "${TRAIN_MODE}" = "tune" ]; then
-    exec /opt/venv/bin/python "${TRAIN_SCRIPT}" \
+    TRAIN_EXTRA_ARGS_FORWARDED=1 exec /opt/venv/bin/python "${TRAIN_SCRIPT}" \
         --config "${TRAIN_CONFIG}" \
         --mode "${TRAIN_MODE}" \
         ${TRAIN_EXTRA_ARGS}
@@ -54,7 +48,7 @@ fi
 
 ACCELERATE_CONFIG_PATH="$(resolve_accelerate_config_file)"
 
-exec /opt/venv/bin/python -m accelerate.commands.launch \
+TRAIN_EXTRA_ARGS_FORWARDED=1 exec /opt/venv/bin/python -m accelerate.commands.launch \
     --num_processes="${NUM_PROCESSES:-1}" \
     --config_file="${ACCELERATE_CONFIG_PATH}" \
     "${TRAIN_SCRIPT}" \

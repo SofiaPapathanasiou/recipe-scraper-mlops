@@ -247,28 +247,49 @@ def load_central_optuna_config(config_dir: Path, model_name: str) -> dict[str, A
     return deep_merge_dicts(default_cfg, model_cfg)
 
 
+def _resolve_env_or_config_path(path_value: str, config_dir: Path) -> Path:
+    raw_path = Path(os.path.expandvars(os.path.expanduser(path_value)))
+    if raw_path.is_absolute():
+        return raw_path
+    return (config_dir / raw_path).resolve()
+
+
 def load_config(yaml_path: str) -> dict[str, Any]:
+    config_dir = Path(yaml_path).resolve().parent
     with open(yaml_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
 
     data_cfg = config.setdefault("data", {})
+    checkpointing_cfg = config.setdefault("checkpointing", {})
+    huggingface_cfg = config.setdefault("huggingface", {})
+
+    env_data_dir = os.getenv("TRAINING_DATA_DIR") or os.getenv("DATA_DIR")
+    if env_data_dir:
+        data_cfg["data_dir"] = str(_resolve_env_or_config_path(env_data_dir, config_dir))
+
+    env_checkpoint_dir = os.getenv("TRAINING_CHECKPOINT_DIR") or os.getenv("CHECKPOINT_DIR")
+    if env_checkpoint_dir:
+        checkpointing_cfg["checkpoint_dir"] = str(_resolve_env_or_config_path(env_checkpoint_dir, config_dir))
+
+    env_hf_cache_dir = (
+        os.getenv("TRAINING_HF_CACHE_DIR")
+        or os.getenv("HF_CACHE_DIR")
+        or os.getenv("HUGGINGFACE_CACHE_DIR")
+    )
+    if env_hf_cache_dir:
+        huggingface_cfg["cache_dir"] = str(_resolve_env_or_config_path(env_hf_cache_dir, config_dir))
+
     data_source = data_cfg.get("source", "mock")
     if data_source not in {"mock", "jsonl"}:
         raise ValueError(
             f"Unsupported data.source {data_source!r}; expected one of ('mock', 'jsonl')."
         )
     if data_source == "jsonl":
-        config_dir = Path(yaml_path).resolve().parent
-
         def resolve_config_path(path_value: str) -> Path:
-            raw_path = Path(os.path.expandvars(os.path.expanduser(path_value)))
-            if raw_path.is_absolute():
-                return raw_path
-            return (config_dir / raw_path).resolve()
+            return _resolve_env_or_config_path(path_value, config_dir)
 
         env_train_path = os.getenv("TRAIN_JSONL_PATH") or os.getenv("TRAIN_DATA_PATH")
         env_eval_path = os.getenv("EVAL_JSONL_PATH") or os.getenv("EVAL_DATA_PATH")
-        env_data_dir = os.getenv("TRAINING_DATA_DIR") or os.getenv("DATA_DIR")
 
         configured_data_dir = data_cfg.get("data_dir")
         configured_train_file = data_cfg.get("train_file", "train.jsonl")
@@ -283,6 +304,7 @@ def load_config(yaml_path: str) -> dict[str, Any]:
             candidate_dirs.append(resolve_config_path(str(configured_data_dir)))
         candidate_dirs.extend(
             [
+                Path("/data"),
                 (Path.cwd() / "data").resolve(),
                 (config_dir.parent / "data").resolve(),
                 (config_dir.parent.parent / "data").resolve(),
@@ -353,11 +375,11 @@ def load_config(yaml_path: str) -> dict[str, Any]:
 
 
 def resolve_default_config_path() -> str:
-    script_dir = Path(__file__).resolve().parent
-    new_path = script_dir / "config" / "config.yaml"
+    training_root = Path(__file__).resolve().parent.parent
+    new_path = training_root / "config" / "config.yaml"
     if new_path.exists():
         return str(new_path)
-    return str(script_dir / "config.yaml")
+    return str(training_root / "config.yaml")
 
 
 def load_training_context(context_path: str | None) -> TrainingContext | None:
@@ -426,10 +448,6 @@ def resolve_accelerate_config_path(
     *,
     output_path: Path | None = None,
 ) -> str:
-    configured_path = os.getenv("ACCELERATE_CONFIG_FILE")
-    if configured_path:
-        return configured_path
-
     embedded_cfg = cfg.get("accelerate") if isinstance(cfg, dict) else None
     if embedded_cfg is not None:
         if not isinstance(embedded_cfg, dict):
@@ -451,8 +469,7 @@ def resolve_accelerate_config_path(
         return str(destination)
 
     raise ValueError(
-        "Config must define a non-empty 'accelerate' mapping when "
-        "ACCELERATE_CONFIG_FILE is not set."
+        "Config must define a non-empty 'accelerate' mapping for Accelerate launches."
     )
 
 

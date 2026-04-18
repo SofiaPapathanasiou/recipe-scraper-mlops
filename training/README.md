@@ -153,13 +153,17 @@ Behavior by mode:
 - `TRAIN_MODE=train`: launches `train.py` through `accelerate`
 - `TRAIN_MODE=tune`: runs `train.py --mode tune` directly, and tune mode launches its own Accelerate trial workers internally
 
+If `train.py` is invoked directly in `train` mode without Accelerate rank env vars, it now re-execs itself through `accelerate.commands.launch` using the `accelerate:` block from the training config.
+
 Key environment variables:
 
 - `TRAIN_MODE`: `train` or `tune`
 - `TRAIN_CONFIG`: config path inside the container, default `config/config.yaml`
-- `TRAIN_EXTRA_ARGS`: extra CLI flags appended to the training command
+- `TRAIN_EXTRA_ARGS`: extra default CLI flags applied before explicit command-line arguments
+- `DATA_DIR` or `TRAINING_DATA_DIR`: optional base directory for JSONL training data discovery
+- `TRAINING_CHECKPOINT_DIR` or `CHECKPOINT_DIR`: optional override for `checkpointing.checkpoint_dir`
+- `TRAINING_HF_CACHE_DIR`, `HF_CACHE_DIR`, or `HUGGINGFACE_CACHE_DIR`: optional override for `huggingface.cache_dir`
 - `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count
-- `ACCELERATE_CONFIG_FILE`: optional override for Accelerate config path. If unset, the launcher reads the `accelerate` block from `TRAIN_CONFIG`
 - `MLFLOW_TRACKING_URI`: remote tracking server override
 
 The training container is not started by `docker compose up -d` unless you explicitly
@@ -276,6 +280,7 @@ python train.py --config config/config.yaml --mode train
 - Uses mock-generated data only in this refactor
 - Tracks runs in the remote MLflow server
 - Saves local checkpoints under `/app/checkpoints/...`
+- These storage paths can be redirected for Kubernetes or external volumes with `DATA_DIR`, `TRAINING_CHECKPOINT_DIR`, and `HF_CACHE_DIR`
 - Logs the best checkpoint directory to MLflow artifacts under `checkpoints/best`
 - Optionally registers the best model in the MLflow Model Registry
 - In the training container, this path is launched via `accelerate`

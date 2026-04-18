@@ -3,6 +3,8 @@ import copy
 import json
 import math
 import os
+import shlex
+import sys
 import tempfile
 import time
 import traceback
@@ -49,6 +51,7 @@ from utils import (
     maybe_start_mlflow_run,
     prepare_model_cache,
     prune_requested_via_file,
+    resolve_accelerate_config_path,
     resolve_default_config_path,
     resolve_mlflow_tracking_uri,
     resolve_run_checkpoint_dir,
@@ -682,17 +685,54 @@ def run_optuna_study(cfg: dict[str, Any]) -> optuna.study.Study:
 # CLI entrypoint
 # =============================================================================
 
+def _resolve_cli_argv() -> list[str]:
+    if os.getenv("TRAIN_EXTRA_ARGS_FORWARDED") == "1":
+        return sys.argv[1:]
+    env_extra_args = os.getenv("TRAIN_EXTRA_ARGS", "").strip()
+    if not env_extra_args:
+        return sys.argv[1:]
+    return [*shlex.split(env_extra_args), *sys.argv[1:]]
+
+
+def _should_bootstrap_accelerate(mode: str) -> bool:
+    return (
+        mode == "train"
+        and os.getenv("TRAIN_ACCELERATE_BOOTSTRAPPED") != "1"
+        and os.getenv("LOCAL_RANK") is None
+        and os.getenv("WORLD_SIZE") is None
+    )
+
+
+def _bootstrap_train_via_accelerate(cfg: dict[str, Any], argv: list[str]) -> None:
+    accelerate_config_path = resolve_accelerate_config_path(cfg)
+    command = [
+        sys.executable,
+        "-m",
+        "accelerate.commands.launch",
+        "--num_processes",
+        os.getenv("NUM_PROCESSES", "1"),
+        "--config_file",
+        accelerate_config_path,
+        str(Path(__file__).resolve()),
+        *argv,
+    ]
+    child_env = os.environ.copy()
+    child_env["TRAIN_ACCELERATE_BOOTSTRAPPED"] = "1"
+    child_env["TRAIN_EXTRA_ARGS_FORWARDED"] = "1"
+    os.execvpe(sys.executable, command, child_env)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a T5 recipe-correction model with Accelerate.")
     parser.add_argument(
         "--config",
-        default=resolve_default_config_path(),
+        default=os.getenv("TRAIN_CONFIG") or resolve_default_config_path(),
         help="Path to the training config YAML file.",
     )
     parser.add_argument(
         "--mode",
         choices=("train", "tune"),
-        default="train",
+        default=os.getenv("TRAIN_MODE", "train"),
         help="Whether to run one training job or an Optuna tuning study.",
     )
     parser.add_argument(
@@ -705,11 +745,14 @@ def main() -> None:
         default=None,
         help=argparse.SUPPRESS,
     )
-    args = parser.parse_args()
+    argv = _resolve_cli_argv()
+    args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.experiment_name:
         cfg.setdefault("mlflow", {})
         cfg["mlflow"]["active_experiment_name"] = args.experiment_name
+    if _should_bootstrap_accelerate(args.mode):
+        _bootstrap_train_via_accelerate(cfg, argv)
     context = load_training_context(args.context_file)
 
     if args.mode == "tune":
