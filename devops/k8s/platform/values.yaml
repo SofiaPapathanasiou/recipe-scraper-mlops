@@ -4,7 +4,7 @@ namespace:
 postgres:
   image:
     repository: postgres
-    tag: "18"
+    tag: "16"
     pullPolicy: IfNotPresent
   service:
     port: 5432
@@ -104,7 +104,7 @@ triton:
   enabled: true
   image:
     repository: graceritamcgrath/triton-custom
-    tag: "24.10-py3-min"
+    tag: "24.10-py3"
     pullPolicy: IfNotPresent
   service:
     type: NodePort
@@ -116,11 +116,11 @@ triton:
     requests:
       memory: "8Gi"
       cpu: "2"
-      ephemeral-storage: "25Gi"
+      ephemeral-storage: "5Gi"
     limits:
       memory: "12Gi"
       cpu: "4"
-      ephemeral-storage: "40Gi"
+      ephemeral-storage: "10Gi"
 
 prometheus:
   enabled: true

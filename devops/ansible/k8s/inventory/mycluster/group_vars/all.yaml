@@ -25,3 +25,7 @@ node_feature_discovery_master_config:
 nvidia_accelerator_enabled: true
 nvidia_gpu_nodes:
   - gpu-node
+
+# Lower eviction threshold to allow large images
+kubelet_eviction_hard:
+  ephemeral-storage: 2Gi

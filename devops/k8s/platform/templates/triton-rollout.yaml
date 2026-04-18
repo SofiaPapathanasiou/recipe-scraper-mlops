@@ -16,7 +16,11 @@ spec:
         app: recipe-triton
     spec:
       nodeSelector:
-        kubernetes.io/hostname: node3
+        kubernetes.io/hostname: gpu-node
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
       initContainers:
         - name: init-models
           image: python:3.11
@@ -62,6 +66,9 @@ spec:
 
       containers:
         - name: triton
+          env:
+            - name: VERSION
+              value: "v3"
           image: "{{ .Values.triton.image.repository }}:{{ .Values.triton.image.tag }}"
           imagePullPolicy: {{ .Values.triton.image.pullPolicy }}
           command: ["/bin/sh", "-c"]

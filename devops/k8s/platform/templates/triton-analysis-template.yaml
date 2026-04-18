@@ -13,6 +13,6 @@ spec:
       failureLimit: 1
       provider:
         prometheus:
-          address: http://prometheus-svc:9090
+          address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
           query: |
             sum(nv_inference_request_success)
