@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-mealie_cleaner.py
-Polls Mealie for new recipes, sends them to Triton for cleaning,
-and updates them back in Mealie.
-"""
 import json
 import time
 import requests
@@ -11,6 +6,7 @@ import requests
 MEALIE_URL = "http://129.114.26.25:30900"
 TRITON_URL = "http://129.114.26.25:30910"
 MEALIE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJsb25nX3Rva2VuIjp0cnVlLCJpZCI6IjE3MWIyMTVmLTg5OTQtNDU0Ny1hZjFjLTUxNTc5NzFlNDdhMCIsIm5hbWUiOiJtbG9wcyIsImludGVncmF0aW9uX2lkIjoiZ2VuZXJpYyIsImV4cCI6MTkzNDIyNTMwMH0.Oum8pAQDTnttoM55AOR5OOJZUfrItbPCaqwQKU9FDhw"
+FEEDBACK_FILE = "/tmp/feedback_pairs.jsonl"
 
 HEADERS = {"Authorization": f"Bearer {MEALIE_TOKEN}"}
 
@@ -46,6 +42,16 @@ def get_recipe(slug):
         return response.json()
     return None
 
+def save_feedback(text, cleaned):
+    pair = {
+        "input": text,
+        "target": cleaned,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "source": "user_feedback"
+    }
+    with open(FEEDBACK_FILE, "a") as f:
+        f.write(json.dumps(pair) + "\n")
+
 def main():
     print("Starting Mealie recipe cleaner...")
     processed = set()
@@ -56,21 +62,19 @@ def main():
             slug = r.get("slug")
             if slug in processed:
                 continue
-
             recipe = get_recipe(slug)
             if not recipe:
                 continue
-
             print(f"Processing: {recipe.get('name')}")
             text = format_recipe_for_triton(recipe)
             cleaned = call_triton(text)
-
             if cleaned:
                 print(f"Cleaned: {cleaned[:100]}...")
+                save_feedback(text, cleaned)
+                print(f"Saved training pair!")
                 processed.add(slug)
             else:
                 print(f"Failed to clean: {slug}")
-
         time.sleep(30)
 
 if __name__ == "__main__":
