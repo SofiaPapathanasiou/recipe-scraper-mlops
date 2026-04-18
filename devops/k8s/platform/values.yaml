@@ -104,7 +104,7 @@ triton:
   enabled: true
   image:
     repository: graceritamcgrath/triton-custom
-    tag: "24.10-py3"
+    tag: "24.10-py3-min"
     pullPolicy: IfNotPresent
   service:
     type: NodePort
