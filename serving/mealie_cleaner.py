@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import json
 import time
+import subprocess
 import requests
 
 MEALIE_URL = "http://129.114.26.25:30900"
 TRITON_URL = "http://129.114.26.25:30910"
 MEALIE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJsb25nX3Rva2VuIjp0cnVlLCJpZCI6IjE3MWIyMTVmLTg5OTQtNDU0Ny1hZjFjLTUxNTc5NzFlNDdhMCIsIm5hbWUiOiJtbG9wcyIsImludGVncmF0aW9uX2lkIjoiZ2VuZXJpYyIsImV4cCI6MTkzNDIyNTMwMH0.Oum8pAQDTnttoM55AOR5OOJZUfrItbPCaqwQKU9FDhw"
 FEEDBACK_FILE = "/tmp/feedback_pairs.jsonl"
+CONTAINER = "ObjStore_proj22"
 
 HEADERS = {"Authorization": f"Bearer {MEALIE_TOKEN}"}
 
@@ -51,6 +53,14 @@ def save_feedback(text, cleaned):
     }
     with open(FEEDBACK_FILE, "a") as f:
         f.write(json.dumps(pair) + "\n")
+    
+    # Upload to object store
+    subprocess.run([
+        "swift", "upload", CONTAINER,
+        FEEDBACK_FILE,
+        "--object-name", "feedback/feedback_pairs.jsonl"
+    ], capture_output=True)
+    print("Saved and uploaded to object store!")
 
 def main():
     print("Starting Mealie recipe cleaner...")
@@ -71,7 +81,6 @@ def main():
             if cleaned:
                 print(f"Cleaned: {cleaned[:100]}...")
                 save_feedback(text, cleaned)
-                print(f"Saved training pair!")
                 processed.add(slug)
             else:
                 print(f"Failed to clean: {slug}")
