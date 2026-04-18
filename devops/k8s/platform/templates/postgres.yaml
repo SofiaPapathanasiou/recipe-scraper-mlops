@@ -32,7 +32,7 @@ spec:
         app: postgres
     spec:
       nodeSelector:
-        kubernetes.io/hostname: node4
+        kubernetes.io/hostname: node5
       containers:
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"

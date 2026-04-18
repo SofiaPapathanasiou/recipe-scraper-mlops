@@ -16,7 +16,7 @@ spec:
         app: recipe-triton
     spec:
       nodeSelector:
-        kubernetes.io/hostname: node5
+        kubernetes.io/hostname: node3
       initContainers:
         - name: init-models
           image: python:3.11
