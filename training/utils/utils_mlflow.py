@@ -33,6 +33,7 @@ from .utils_core import (
     DEFAULT_MLFLOW_TRACKING_URI,
     TrainingContext,
     ensure_hf_cache_env,
+    flatten_dict,
     get_mlflow_experiment_name,
     resolve_mlflow_tracking_uri,
     sanitize_study_name,
@@ -380,6 +381,10 @@ def resolve_run_checkpoint_dir(checkpoint_dir: Path, run_id: str | None) -> Path
     if run_id:
         return checkpoint_dir / run_id
     return checkpoint_dir / f"manual-run-{int(time.time())}"
+
+
+def resolve_best_checkpoint_dir(checkpoint_dir: Path, run_id: str | None) -> Path:
+    return resolve_run_checkpoint_dir(checkpoint_dir, run_id) / "best"
 
 
 def save_checkpoint(

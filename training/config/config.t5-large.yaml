@@ -24,6 +24,10 @@ accelerate:
   mixed_precision: fp16
   dynamo_backend: "no"
 
+runtime:
+  torch_build_mode: auto
+  jupyter_token: ""
+
 evaluation:
   logging_steps: 10
   eval_steps: 500
@@ -38,6 +42,7 @@ huggingface:
   cache_dir: /app/checkpoints/huggingface-cache
 
 mlflow:
+  tracking_uri: http://192.168.1.11:30800/
   experiment_name: recipe-correction-t5-large-baseline
   tuning_experiment_name: recipe-correction-t5-large-optuna
 

@@ -12,7 +12,7 @@ import optuna
 import torch
 import yaml
 
-DEFAULT_MLFLOW_TRACKING_URI = "http://129.114.26.23:8000/"
+DEFAULT_MLFLOW_TRACKING_URI = "file:///app/mlruns"
 
 @dataclass
 class TrainingContext:
@@ -140,6 +140,27 @@ def resolve_mlflow_tracking_uri(cfg: dict[str, Any]) -> str:
         or DEFAULT_MLFLOW_TRACKING_URI
     ).strip()
     return configured or DEFAULT_MLFLOW_TRACKING_URI
+
+
+def resolve_num_processes(cfg: dict[str, Any]) -> int:
+    available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    requested = os.getenv("NUM_PROCESSES")
+    if requested is None or requested.strip() == "":
+        requested = cfg.get("accelerate", {}).get("num_processes")
+
+    if requested is None or str(requested).strip() == "":
+        return available_gpu_count if available_gpu_count > 0 else 1
+
+    try:
+        parsed = int(str(requested))
+    except ValueError as error:
+        raise ValueError(f"NUM_PROCESSES must be an integer, got {requested!r}.") from error
+
+    if parsed < 1:
+        raise ValueError(f"NUM_PROCESSES must be at least 1, got {parsed}.")
+    if available_gpu_count == 0:
+        return 1
+    return min(parsed, available_gpu_count)
 
 
 def ensure_mlflow_experiment(cfg: dict[str, Any], experiment_name: str) -> str:
@@ -425,22 +446,8 @@ def ensure_supported_tune_runtime() -> None:
         )
 
 
-def resolve_tune_num_processes() -> int:
-    available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    requested = os.getenv("NUM_PROCESSES")
-    if requested is None or requested.strip() == "":
-        return available_gpu_count if available_gpu_count > 0 else 1
-
-    try:
-        parsed = int(requested)
-    except ValueError as error:
-        raise ValueError(f"NUM_PROCESSES must be an integer, got {requested!r}.") from error
-
-    if parsed < 1:
-        raise ValueError(f"NUM_PROCESSES must be at least 1, got {parsed}.")
-    if available_gpu_count == 0:
-        return 1
-    return min(parsed, available_gpu_count)
+def resolve_tune_num_processes(cfg: dict[str, Any]) -> int:
+    return resolve_num_processes(cfg)
 
 
 def resolve_accelerate_config_path(
@@ -498,7 +505,7 @@ def resolve_hf_cache_dir(cfg: dict[str, Any]) -> Path:
     if configured:
         return Path(configured).expanduser()
     checkpoint_dir = Path(cfg["checkpointing"]["checkpoint_dir"]).expanduser()
-    return checkpoint_dir.parent / ".hf-cache"
+    return checkpoint_dir.parent / "huggingface-cache"
 
 
 def ensure_hf_cache_env(cache_dir: Path) -> None:
@@ -527,9 +534,27 @@ def prepare_model_cache(cfg: dict[str, Any]) -> str:
 
     cache_dir = resolve_hf_cache_dir(cfg)
     ensure_hf_cache_env(cache_dir)
-    model_snapshot_path = snapshot_download(
-        repo_id=cfg["model"]["name"],
-        cache_dir=str(cache_dir),
-    )
+    model_name = cfg["model"]["name"]
+    try:
+        model_snapshot_path = snapshot_download(
+            repo_id=model_name,
+            cache_dir=str(cache_dir),
+            local_files_only=True,
+        )
+        print(
+            f"[hf-cache] Reusing cached Hugging Face model '{model_name}' from {cache_dir}.",
+            flush=True,
+        )
+    except Exception:
+        print(
+            f"[hf-cache] Cache miss for remote model '{model_name}'. "
+            f"Downloading from Hugging Face into persistent cache {cache_dir}. "
+            "This first run requires outbound network access; later runs reuse the cache.",
+            flush=True,
+        )
+        model_snapshot_path = snapshot_download(
+            repo_id=model_name,
+            cache_dir=str(cache_dir),
+        )
     cfg.setdefault("model", {})["local_path"] = model_snapshot_path
     return model_snapshot_path

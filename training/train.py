@@ -5,7 +5,6 @@ import math
 import os
 import shlex
 import sys
-import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -52,8 +51,10 @@ from utils import (
     prepare_model_cache,
     prune_requested_via_file,
     resolve_accelerate_config_path,
+    resolve_best_checkpoint_dir,
     resolve_default_config_path,
     resolve_mlflow_tracking_uri,
+    resolve_num_processes,
     resolve_run_checkpoint_dir,
     resolve_study_output_dir,
     run_distributed_trial,
@@ -140,6 +141,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     global_step = 0
     train_loss_accumulator = 0.0
     train_loss_window_count = 0
+    resolved_mlflow_tracking_uri = resolve_mlflow_tracking_uri(config_dict)
+    debug_log(
+        accelerator,
+        f"Resolved MLflow tracking URI: {resolved_mlflow_tracking_uri}",
+        section="MLFLOW SETUP",
+    )
     run_id = maybe_start_mlflow_run(
         config_dict,
         train_dataset,
@@ -153,9 +160,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         context,
     )
     run_checkpoint_dir = resolve_run_checkpoint_dir(checkpoint_dir, run_id)
-    temp_best_checkpoint_dir: tempfile.TemporaryDirectory[str] | None = None
-    if not save_intermediate_checkpoints:
-        temp_best_checkpoint_dir = tempfile.TemporaryDirectory(prefix="recipe-best-checkpoint-")
+    persistent_best_checkpoint_dir = resolve_best_checkpoint_dir(checkpoint_dir, run_id)
     training_start = time.time()
     debug_log(
         accelerator,
@@ -166,8 +171,8 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
         if save_intermediate_checkpoints
         else (
             f"MLflow run id: {run_id or 'not-started-on-this-rank'}; "
-            f"intermediate local checkpoint saving is disabled and only a temporary best checkpoint "
-            f"will be kept under {temp_best_checkpoint_dir.name}"
+            f"intermediate local checkpoint saving is disabled and only the best checkpoint "
+            f"will be persisted under {persistent_best_checkpoint_dir}"
         ),
         section="RUN CONTEXT",
     )
@@ -355,13 +360,11 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 if save_intermediate_checkpoints:
                     best_checkpoint = checkpoint_path
                 else:
-                    if temp_best_checkpoint_dir is None:
-                        raise RuntimeError("Temporary checkpoint directory was not initialized.")
                     best_checkpoint = save_checkpoint_to_path(
                         accelerator,
                         model,
                         tokenizer,
-                        Path(temp_best_checkpoint_dir.name) / f"epoch-{epoch:02d}",
+                        persistent_best_checkpoint_dir,
                         epoch_metrics,
                     )
 
@@ -430,6 +433,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     "best_metric_name": objective_metric_name,
                     "best_metric": best_metric_to_log(best_metric, objective_direction),
                     "best_checkpoint": best_checkpoint,
+                    "best_checkpoint_local_path": best_checkpoint,
                     "best_checkpoint_artifact_path": (
                         logged_checkpoint_info["artifact_path"] if logged_checkpoint_info is not None else "none"
                     ),
@@ -481,6 +485,12 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             main_process_only=False,
             section="RUN FAILED",
         )
+        if best_checkpoint is not None:
+            debug_log(
+                accelerator,
+                f"Best checkpoint remains on disk at {best_checkpoint}.",
+                main_process_only=False,
+            )
         debug_log(
             accelerator,
             traceback.format_exc(),
@@ -501,8 +511,6 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     finally:
         if accelerator.is_main_process and mlflow.active_run() is not None:
             mlflow.end_run()
-        if temp_best_checkpoint_dir is not None:
-            temp_best_checkpoint_dir.cleanup()
         accelerator.end_training()
 
 
@@ -710,7 +718,7 @@ def _bootstrap_train_via_accelerate(cfg: dict[str, Any], argv: list[str]) -> Non
         "-m",
         "accelerate.commands.launch",
         "--num_processes",
-        os.getenv("NUM_PROCESSES", "1"),
+        str(resolve_num_processes(cfg)),
         "--config_file",
         accelerate_config_path,
         str(Path(__file__).resolve()),

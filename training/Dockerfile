@@ -75,7 +75,6 @@ ENV PYTHONUNBUFFERED=1 \
     HF_DATASETS_CACHE=/tmp/huggingface/datasets \
     TRANSFORMERS_CACHE=/tmp/huggingface/hub \
     MPLCONFIGDIR=/tmp/matplotlib \
-    MLFLOW_TRACKING_URI=http://129.114.26.23:8000/ \
     TRAIN_SCRIPT=train.py \
     TRAIN_CONFIG=config/config.yaml \
     TRAIN_MODE=train \

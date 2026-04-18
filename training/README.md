@@ -6,13 +6,14 @@ recipe-correction model. The local Docker Compose setup now runs only:
 - A Jupyter Lab container for interactive development
 - A separate training job container for scripted train/tune runs
 
-Both containers log to the remote MLflow server at `http://129.114.26.23:8000/` by
-default. You can override that at runtime with `MLFLOW_TRACKING_URI`.
+Both containers use `MLFLOW_TRACKING_URI` for the remote MLflow server. The repo
+default is a placeholder URI, so set the real endpoint in your `.env` file.
 
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2
-- NVIDIA Container Toolkit if you want GPU access in `jupyter` or `training`
+- NVIDIA Container Toolkit
+- A GPU-capable Docker host for the `training` service. The production training container is GPU-only by design.
 - A populated `.env` file in this directory
 
 The Compose file automatically reads [`.env`](/home/cc/recipe-scraper-mlops/training/.env).
@@ -21,7 +22,7 @@ Important defaults there include:
 - `JUPYTER_TOKEN` for Jupyter auth
 - `TORCH_BUILD_MODE` with `auto`, `cpu`, or `gpu`
 - `NUM_PROCESSES` for Accelerate or tune worker count
-- `MLFLOW_TRACKING_URI` to override the remote tracking server
+- `MLFLOW_TRACKING_URI` to point at your actual remote tracking server
 
 ## Container Layout
 
@@ -75,7 +76,7 @@ docker compose ps
 Open Jupyter Lab:
 
 - Jupyter Lab: `http://localhost:8888`
-- Remote MLflow UI: `http://129.114.26.23:8000/`
+- Remote MLflow UI: the `MLFLOW_TRACKING_URI` value from your `.env` file
 
 If `JUPYTER_TOKEN` is blank, Docker/Jupyter may generate one at startup. Retrieve it with:
 
@@ -89,8 +90,7 @@ The `jupyter` service is the main interactive development environment.
 
 It bind-mounts this repo into `/app`, exposes Jupyter Lab on port `8888`, and runs
 [`scripts/select_torch_build.sh`](/home/cc/recipe-scraper-mlops/training/scripts/select_torch_build.sh)
-on startup so the container installs the CPU or GPU PyTorch extra that matches
-`TORCH_BUILD_MODE`.
+on startup so the container installs the PyTorch extra that matches `TORCH_BUILD_MODE`.
 
 Open a shell inside the running Jupyter container:
 
@@ -131,12 +131,6 @@ If you change dependencies or want the torch variant reselected, recreate Jupyte
 docker compose up -d --build --force-recreate jupyter
 ```
 
-If you want a CPU-only interactive session even on a GPU host:
-
-```bash
-TORCH_BUILD_MODE=cpu docker compose up -d --build jupyter
-```
-
 If you want to force the GPU build:
 
 ```bash
@@ -147,6 +141,9 @@ TORCH_BUILD_MODE=gpu docker compose up -d --build jupyter
 
 The `training` service uses [`scripts/run_training.sh`](/home/cc/recipe-scraper-mlops/training/scripts/run_training.sh)
 as its entrypoint.
+
+The production `training` container requires Docker GPU runtime support and is expected
+to run with `gpus: all`. Treat the Compose training service as GPU-only.
 
 Behavior by mode:
 
@@ -165,6 +162,17 @@ Key environment variables:
 - `TRAINING_HF_CACHE_DIR`, `HF_CACHE_DIR`, or `HUGGINGFACE_CACHE_DIR`: optional override for `huggingface.cache_dir`
 - `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count
 - `MLFLOW_TRACKING_URI`: remote tracking server override
+
+With `checkpointing.save_intermediate_checkpoints: false`, training now persists only the
+current best checkpoint locally under `<checkpoint_dir>/<run_id-or-manual-run>/best` so it
+survives container or pod crashes before the final MLflow artifact upload.
+
+The Hugging Face model cache should live on persistent storage. For Kubernetes, the
+expected path is `/data/checkpoints/huggingface-cache`, which the Helm Job mounts from
+the shared training volume. The first run may need outbound access to Hugging Face to
+download the base model; later runs reuse that persistent cache. If egress is blocked,
+prewarm the cache, enable the Helm cache-prewarm init container, or provide a local
+model path instead of relying on runtime download.
 
 The training container is not started by `docker compose up -d` unless you explicitly
 run it with the `training` profile.
@@ -281,6 +289,7 @@ python train.py --config config/config.yaml --mode train
 - Tracks runs in the remote MLflow server
 - Saves local checkpoints under `/app/checkpoints/...`
 - These storage paths can be redirected for Kubernetes or external volumes with `DATA_DIR`, `TRAINING_CHECKPOINT_DIR`, and `HF_CACHE_DIR`
+- Reuses a persistent Hugging Face cache on later runs after the initial model download
 - Logs the best checkpoint directory to MLflow artifacts under `checkpoints/best`
 - Optionally registers the best model in the MLflow Model Registry
 - In the training container, this path is launched via `accelerate`

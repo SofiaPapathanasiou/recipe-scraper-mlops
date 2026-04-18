@@ -178,7 +178,7 @@ def run_distributed_trial(
     context: TrainingContext,
     trial: optuna.trial.Trial,
 ) -> TrainingResult:
-    num_processes = resolve_tune_num_processes()
+    num_processes = resolve_tune_num_processes(cfg)
     script_path = Path(__file__).resolve().parent.parent / "train.py"
 
     with tempfile.TemporaryDirectory(prefix=f"optuna-trial-{trial.number:04d}-") as temp_dir:
