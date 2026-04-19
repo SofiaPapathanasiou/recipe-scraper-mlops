@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -493,19 +494,43 @@ def build_dataloaders(
     cfg: dict[str, Any], tokenizer: Any, accelerator: Accelerator
 ) -> tuple[DataLoader, DataLoader, Dataset, Dataset]:
     train_dataset, val_dataset = build_datasets(cfg, tokenizer)
+    available_cpu_count = os.cpu_count() or 1
+    process_count = max(1, accelerator.num_processes)
+    configured_num_workers = cfg["data"].get("num_workers", "auto")
+    if configured_num_workers is None:
+        configured_num_workers = "auto"
+
+    if str(configured_num_workers).strip().lower() in {"", "auto"}:
+        # Keep worker fan-out bounded per process so multi-GPU launches do not
+        # oversubscribe the host CPU.
+        per_process_cpu_budget = max(1, available_cpu_count // process_count)
+        num_workers = max(1, min(4, per_process_cpu_budget - 1))
+    else:
+        num_workers = max(0, int(configured_num_workers))
+
+    pin_memory = accelerator.device.type == "cuda"
+    persistent_workers = num_workers > 0
+    prefetch_factor = cfg["data"].get("prefetch_factor", 2) if persistent_workers else None
+
+    common_loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers,
+    }
+    if prefetch_factor is not None:
+        common_loader_kwargs["prefetch_factor"] = int(prefetch_factor)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=cfg["training"]["per_device_train_batch_size"],
         shuffle=True,
-        num_workers=0,
-        pin_memory=accelerator.device.type == "cuda",
+        **common_loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=cfg["training"]["per_device_eval_batch_size"],
         shuffle=False,
-        num_workers=0,
-        pin_memory=accelerator.device.type == "cuda",
+        **common_loader_kwargs,
     )
     return train_loader, val_loader, train_dataset, val_dataset
 
@@ -521,12 +546,14 @@ def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "gradient_accumulation_steps": cfg["training"]["gradient_accumulation_steps"],
         "learning_rate": cfg["training"]["learning_rate"],
         "warmup_ratio": cfg["training"]["warmup_ratio"],
+        "evaluation_every_n_epochs": cfg["evaluation"].get("every_n_epochs", 1),
         "checkpoint_dir": cfg["checkpointing"]["checkpoint_dir"],
         "tracking_uri": cfg["mlflow"]["tracking_uri"],
     }
     if cfg["data"]["source"] == "jsonl":
         summary["train_path"] = cfg["data"]["train_path"]
         summary["eval_path"] = cfg["data"]["eval_path"]
+    summary["dataloader_num_workers"] = cfg["data"].get("num_workers", "auto")
     return summary
 
 

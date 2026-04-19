@@ -75,6 +75,10 @@ from utils import (
 def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = None) -> TrainingResult:
     context = context or TrainingContext()
     mixed_precision = os.getenv("ACCELERATE_MIXED_PRECISION", "no")
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
     accelerator = Accelerator(
         mixed_precision=mixed_precision,
         gradient_accumulation_steps=config_dict["training"]["gradient_accumulation_steps"],
@@ -135,6 +139,8 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     )
     objective_metric_name = context.objective_metric_name or config_dict["evaluation"]["metric_for_best_model"]
     objective_direction = context.objective_direction or infer_metric_direction(objective_metric_name)
+    evaluation_every_n_epochs = max(1, int(config_dict["evaluation"].get("every_n_epochs", 1)))
+    evaluate_on_last_epoch = bool(config_dict["evaluation"].get("run_on_last_epoch", True))
     best_metric = initial_best_metric(objective_direction)
     best_checkpoint: str | None = None
     final_metrics: dict[str, float] = {}
@@ -201,9 +207,9 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 torch.cuda.reset_peak_memory_stats(accelerator.device.index or 0)
 
             for batch_index, batch in enumerate(train_loader, start=1):
-                input_ids = batch["input_ids"].to(accelerator.device)
-                attention_mask = batch["attention_mask"].to(accelerator.device)
-                labels = batch["labels"].to(accelerator.device)
+                input_ids = batch["input_ids"].to(accelerator.device, non_blocking=True)
+                attention_mask = batch["attention_mask"].to(accelerator.device, non_blocking=True)
+                labels = batch["labels"].to(accelerator.device, non_blocking=True)
 
                 if batch_index == 1:
                     debug_log(
@@ -259,6 +265,30 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         train_loss_window_count = 0
 
             epoch_time = time.time() - epoch_start
+            epoch_metrics = {
+                "epoch_time_sec": round(epoch_time, 2),
+                "samples_per_sec": round(len(train_dataset) / max(epoch_time, 1e-6), 2),
+                **get_peak_gpu_metrics(accelerator),
+            }
+            should_run_evaluation = (
+                epoch % evaluation_every_n_epochs == 0
+                or (evaluate_on_last_epoch and epoch == config_dict["training"]["num_epochs"])
+            )
+            if not should_run_evaluation:
+                epoch_metrics["evaluation_skipped"] = 1.0
+                debug_log(
+                    accelerator,
+                    (
+                        f"Epoch {epoch} training phase finished in {epoch_time:.2f}s. "
+                        f"Skipping evaluation because evaluation.every_n_epochs={evaluation_every_n_epochs}."
+                    ),
+                    section=f"EPOCH {epoch} EVALUATION SKIPPED",
+                )
+                if accelerator.is_main_process:
+                    mlflow.log_metrics(epoch_metrics, step=global_step)
+                final_metrics = epoch_metrics
+                continue
+
             debug_log(
                 accelerator,
                 f"Epoch {epoch} training phase finished in {epoch_time:.2f}s. Starting evaluation.",
@@ -267,12 +297,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             eval_metrics = evaluate(model, val_loader, tokenizer, accelerator, config_dict)
             accelerator.wait_for_everyone()
 
-            epoch_metrics = {
-                **eval_metrics,
-                "epoch_time_sec": round(epoch_time, 2),
-                "samples_per_sec": round(len(train_dataset) / max(epoch_time, 1e-6), 2),
-                **get_peak_gpu_metrics(accelerator),
-            }
+            epoch_metrics.update(eval_metrics)
             current_metric = epoch_metrics[objective_metric_name]
             debug_log(
                 accelerator,

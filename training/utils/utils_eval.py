@@ -90,9 +90,9 @@ def evaluate(
 
     for batch_index, batch in enumerate(loader, start=1):
         num_batches += 1
-        input_ids = batch["input_ids"].to(accelerator.device)
-        attention_mask = batch["attention_mask"].to(accelerator.device)
-        labels = batch["labels"].to(accelerator.device)
+        input_ids = batch["input_ids"].to(accelerator.device, non_blocking=True)
+        attention_mask = batch["attention_mask"].to(accelerator.device, non_blocking=True)
+        labels = batch["labels"].to(accelerator.device, non_blocking=True)
 
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
         loss = outputs.loss.float()

@@ -22,6 +22,7 @@ Important defaults there include:
 - `JUPYTER_TOKEN` for Jupyter auth
 - `TORCH_BUILD_MODE` with `auto`, `cpu`, or `gpu`
 - `NUM_PROCESSES` for Accelerate or tune worker count
+  Defaults to `accelerate.num_processes`, which may be set to `auto`
 - `MLFLOW_TRACKING_URI` to point at your actual remote tracking server
 
 ## Container Layout
@@ -158,9 +159,12 @@ Key environment variables:
 - `TRAIN_CONFIG`: config path inside the container, default `config/config.yaml`
 - `TRAIN_EXTRA_ARGS`: extra default CLI flags applied before explicit command-line arguments
 - `DATA_DIR` or `TRAINING_DATA_DIR`: optional base directory for JSONL training data discovery
+- `data.num_workers`: DataLoader worker count per process; `auto` picks a bounded host-aware default
+- `data.prefetch_factor`: batches prefetched by each DataLoader worker
+- `evaluation.every_n_epochs`: run full validation every N epochs; final epoch can still be forced
 - `TRAINING_CHECKPOINT_DIR` or `CHECKPOINT_DIR`: optional override for `checkpointing.checkpoint_dir`
 - `TRAINING_HF_CACHE_DIR`, `HF_CACHE_DIR`, or `HUGGINGFACE_CACHE_DIR`: optional override for `huggingface.cache_dir`
-- `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count
+- `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count; `auto` uses visible GPU count
 - `MLFLOW_TRACKING_URI`: remote tracking server override
 
 With `checkpointing.save_intermediate_checkpoints: false`, training now persists only the
@@ -228,9 +232,15 @@ Set Accelerate launch options directly in your train config:
 accelerate:
   compute_environment: LOCAL_MACHINE
   distributed_type: MULTI_GPU
-  num_processes: 1
-  mixed_precision: fp16
+  num_processes: auto
+  mixed_precision: bf16
   dynamo_backend: "no"
+```
+
+```yaml
+evaluation:
+  every_n_epochs: 2
+  run_on_last_epoch: true
 ```
 
 Override the number of processes:

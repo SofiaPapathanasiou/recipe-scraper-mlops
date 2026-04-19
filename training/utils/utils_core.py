@@ -146,15 +146,21 @@ def resolve_num_processes(cfg: dict[str, Any]) -> int:
     available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     requested = os.getenv("NUM_PROCESSES")
     if requested is None or requested.strip() == "":
-        requested = cfg.get("accelerate", {}).get("num_processes")
+        requested = cfg.get("accelerate", {}).get("num_processes", "auto")
 
-    if requested is None or str(requested).strip() == "":
+    if requested is None:
+        requested = "auto"
+
+    requested_text = str(requested).strip().lower()
+    if requested_text in {"", "auto"}:
         return available_gpu_count if available_gpu_count > 0 else 1
 
     try:
-        parsed = int(str(requested))
+        parsed = int(requested_text)
     except ValueError as error:
-        raise ValueError(f"NUM_PROCESSES must be an integer, got {requested!r}.") from error
+        raise ValueError(
+            f"NUM_PROCESSES must be an integer or 'auto', got {requested!r}."
+        ) from error
 
     if parsed < 1:
         raise ValueError(f"NUM_PROCESSES must be at least 1, got {parsed}.")

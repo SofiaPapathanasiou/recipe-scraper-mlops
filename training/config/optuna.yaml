@@ -28,30 +28,36 @@ default:
 models:
   t5-small:
     search_space:
+      training.learning_rate:
+        type: categorical
+        choices: [1.0e-4, 1.5e-4, 2.0e-4]
       training.gradient_accumulation_steps:
-        type: int
-        low: 1
-        high: 8
+        type: categorical
+        choices: [1, 2]
       training.per_device_train_batch_size:
         type: categorical
-        choices: [4, 8, 16]
+        choices: [32, 48, 64]
 
   t5-base:
     search_space:
+      training.learning_rate:
+        type: categorical
+        choices: [1.0e-4, 1.5e-4, 2.0e-4]
       training.gradient_accumulation_steps:
-        type: int
-        low: 1
-        high: 16
+        type: categorical
+        choices: [1, 2]
       training.per_device_train_batch_size:
         type: categorical
-        choices: [1, 2, 4]
+        choices: [8, 12, 16]
 
   t5-large:
     search_space:
+      training.learning_rate:
+        type: categorical
+        choices: [1.0e-4, 1.2e-4, 1.5e-4]
       training.gradient_accumulation_steps:
-        type: int
-        low: 1
-        high: 16
-      training.per_device_train_batch_size:
         type: categorical
         choices: [1, 2]
+      training.per_device_train_batch_size:
+        type: categorical
+        choices: [4, 6, 8]

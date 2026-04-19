@@ -18,6 +18,7 @@ MLFLOW_RUN_PARAM_ALLOWLIST = [
     "training.gradient_accumulation_steps",
     "training.warmup_ratio",
     "training.seed",
+    "evaluation.every_n_epochs",
     "evaluation.metric_for_best_model",
 ]
 

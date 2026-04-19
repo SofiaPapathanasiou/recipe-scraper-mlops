@@ -11,6 +11,7 @@ resolve_num_processes() {
 import sys
 from pathlib import Path
 
+import torch
 import yaml
 
 config_path = Path(sys.argv[1])
@@ -20,7 +21,31 @@ if not config_path.exists():
 with open(config_path, "r", encoding="utf-8") as handle:
     config = yaml.safe_load(handle) or {}
 
-print(config.get("accelerate", {}).get("num_processes", 1))
+available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+requested = config.get("accelerate", {}).get("num_processes", "auto")
+
+if requested is None:
+    requested = "auto"
+
+requested_text = str(requested).strip().lower()
+if requested_text in {"", "auto"}:
+    print(available_gpu_count if available_gpu_count > 0 else 1)
+    raise SystemExit(0)
+
+try:
+    parsed = int(requested_text)
+except ValueError as error:
+    raise SystemExit(
+        f"Invalid accelerate.num_processes value {requested!r}. Use an integer or 'auto'."
+    ) from error
+
+if parsed < 1:
+    raise SystemExit(f"accelerate.num_processes must be at least 1, got {parsed}.")
+
+if available_gpu_count == 0:
+    print(1)
+else:
+    print(min(parsed, available_gpu_count))
 PY
 }
 

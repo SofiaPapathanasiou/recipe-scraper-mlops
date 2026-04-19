@@ -10,9 +10,9 @@ training:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   num_epochs: 5
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 16
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 1
   warmup_ratio: 0.10
   max_grad_norm: 1.0
   seed: 42
@@ -20,8 +20,8 @@ training:
 accelerate:
   compute_environment: LOCAL_MACHINE
   distributed_type: MULTI_GPU
-  num_processes: 1
-  mixed_precision: fp16
+  num_processes: auto
+  mixed_precision: bf16
   dynamo_backend: "no"
 
 runtime:
@@ -29,7 +29,9 @@ runtime:
   jupyter_token: ""
 
 evaluation:
-  logging_steps: 10
+  logging_steps: 50
+  every_n_epochs: 2
+  run_on_last_epoch: true
   eval_steps: 500
   metric_for_best_model: eval_rougeL
 
@@ -56,5 +58,7 @@ data:
   train_file: train.jsonl
   eval_file: eval.jsonl
   data_dir:
+  num_workers: auto
+  prefetch_factor: 2
   mock_train_size: 200
   mock_val_size: 40
