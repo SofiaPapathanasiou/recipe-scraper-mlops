@@ -181,6 +181,139 @@ model path instead of relying on runtime download.
 The training container is not started by `docker compose up -d` unless you explicitly
 run it with the `training` profile.
 
+## Direct Docker Run Commands
+
+Build the standalone training image from the repo root:
+
+```bash
+docker build -t recipe-training -f training/Dockerfile training
+```
+
+Use this base `docker run` command for direct container launches:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  recipe-training
+```
+
+The entrypoint is [`scripts/run_training.sh`](/home/cc/recipe-scraper-mlops/training/scripts/run_training.sh), so the
+container is configured through environment variables. The user-facing controls are:
+
+- `-e TRAIN_MODE=train|tune`
+- `-e TRAIN_CONFIG=/app/config/<file>.yaml`
+- `-e NUM_PROCESSES=<n>`
+- `-e MLFLOW_TRACKING_URI=<uri>`
+- `-e TRAIN_EXTRA_ARGS="--experiment-name <name>"`
+
+Examples for each supported runtime flag:
+
+Run standard training:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  recipe-training
+```
+
+Run tune mode:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e TRAIN_MODE=tune \
+  recipe-training
+```
+
+Use a different config file:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e TRAIN_CONFIG=/app/config/config.t5-small.yaml \
+  recipe-training
+```
+
+Override Accelerate process count:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e NUM_PROCESSES=1 \
+  recipe-training
+```
+
+Override the MLflow tracking server:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
+  recipe-training
+```
+
+Pass the forwarded `train.py` flag:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e 'TRAIN_EXTRA_ARGS=--experiment-name my-experiment' \
+  recipe-training
+```
+
+Combine multiple flags in one run:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v "$(pwd)/training:/app" \
+  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/training/checkpoints:/app/checkpoints" \
+  --env-file training/.env \
+  -e TRAIN_MODE=tune \
+  -e TRAIN_CONFIG=/app/config/config.t5-base.yaml \
+  -e NUM_PROCESSES=2 \
+  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
+  -e 'TRAIN_EXTRA_ARGS=--experiment-name recipe-tuning' \
+  recipe-training
+```
+
+The container entrypoint does not forward positional arguments from `docker run image ...`.
+If you want to pass `train.py` CLI flags, use `TRAIN_EXTRA_ARGS`. The public `train.py`
+flags are:
+
+- `--config`
+- `--mode`
+- `--experiment-name`
+
 ## Common Training Commands
 
 Run a standard training job:

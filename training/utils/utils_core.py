@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -454,6 +455,36 @@ def ensure_supported_tune_runtime() -> None:
 
 def resolve_tune_num_processes(cfg: dict[str, Any]) -> int:
     return resolve_num_processes(cfg)
+
+
+def build_accelerate_launch_command(
+    cfg: dict[str, Any],
+    *,
+    script_path: str | Path,
+    script_args: list[str],
+    num_processes: int | None = None,
+    accelerate_config_path: str | None = None,
+) -> list[str]:
+    resolved_num_processes = num_processes if num_processes is not None else resolve_num_processes(cfg)
+    resolved_accelerate_config_path = accelerate_config_path or resolve_accelerate_config_path(cfg)
+    return [
+        sys.executable,
+        "-m",
+        "accelerate.commands.launch",
+        "--num_processes",
+        str(resolved_num_processes),
+        "--config_file",
+        str(resolved_accelerate_config_path),
+        str(Path(script_path).resolve()),
+        *script_args,
+    ]
+
+
+def build_accelerate_launch_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    child_env = dict(base_env or os.environ.copy())
+    child_env["TRAIN_ACCELERATE_BOOTSTRAPPED"] = "1"
+    child_env["TRAIN_EXTRA_ARGS_FORWARDED"] = "1"
+    return child_env
 
 
 def resolve_accelerate_config_path(

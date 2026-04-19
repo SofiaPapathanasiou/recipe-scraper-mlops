@@ -1,24 +1,22 @@
 import copy
-import json
-import os
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import optuna
-import torch
 
 from .utils_core import (
     TrainingContext,
     TrainingResult,
-    append_jsonl_file,
+    build_accelerate_launch_command,
+    build_accelerate_launch_env,
     deserialize_training_result,
     ensure_hf_cache_env,
     get_nested_value,
     get_optuna_study_name,
+    load_progress_updates,
     resolve_accelerate_config_path,
     resolve_hf_cache_dir,
     sanitize_study_name,
@@ -154,25 +152,6 @@ def summarize_trial_counts(study: optuna.study.Study) -> dict[str, int]:
     return counts
 
 
-def load_progress_updates(progress_path: Path, seen_epochs: set[int]) -> list[dict[str, Any]]:
-    if not progress_path.exists():
-        return []
-
-    updates: list[dict[str, Any]] = []
-    with open(progress_path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            epoch = int(payload["epoch"])
-            if epoch in seen_epochs:
-                continue
-            seen_epochs.add(epoch)
-            updates.append(payload)
-    return updates
-
-
 def run_distributed_trial(
     cfg: dict[str, Any],
     context: TrainingContext,
@@ -204,24 +183,22 @@ def run_distributed_trial(
 
         cache_dir = resolve_hf_cache_dir(cfg)
         ensure_hf_cache_env(cache_dir)
-        child_env = os.environ.copy()
+        child_env = build_accelerate_launch_env()
 
-        command = [
-            sys.executable,
-            "-m",
-            "accelerate.commands.launch",
-            "--num_processes",
-            str(num_processes),
-            "--config_file",
-            accelerate_config_path,
-            str(script_path),
-            "--config",
-            str(config_path),
-            "--mode",
-            "train",
-            "--context-file",
-            str(context_path),
-        ]
+        command = build_accelerate_launch_command(
+            cfg,
+            script_path=script_path,
+            script_args=[
+                "--config",
+                str(config_path),
+                "--mode",
+                "train",
+                "--context-file",
+                str(context_path),
+            ],
+            num_processes=num_processes,
+            accelerate_config_path=accelerate_config_path,
+        )
         emit_console_summary(
             print,
             f"TUNE TRIAL {trial.number:04d} START",

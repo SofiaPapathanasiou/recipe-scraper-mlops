@@ -3,6 +3,8 @@ from .utils_core import (
     TrainingResult,
     append_jsonl_file,
     best_metric_to_log,
+    build_accelerate_launch_command,
+    build_accelerate_launch_env,
     deep_merge_dicts,
     deserialize_training_context,
     deserialize_training_result,

@@ -24,6 +24,8 @@ from utils import (
     append_jsonl_file,
     apply_trial_params,
     best_metric_to_log,
+    build_accelerate_launch_command,
+    build_accelerate_launch_env,
     build_dataloaders,
     build_mlflow_run_tags,
     build_optuna_pruner,
@@ -731,21 +733,12 @@ def _should_bootstrap_accelerate(mode: str) -> bool:
 
 
 def _bootstrap_train_via_accelerate(cfg: dict[str, Any], argv: list[str]) -> None:
-    accelerate_config_path = resolve_accelerate_config_path(cfg)
-    command = [
-        sys.executable,
-        "-m",
-        "accelerate.commands.launch",
-        "--num_processes",
-        str(resolve_num_processes(cfg)),
-        "--config_file",
-        accelerate_config_path,
-        str(Path(__file__).resolve()),
-        *argv,
-    ]
-    child_env = os.environ.copy()
-    child_env["TRAIN_ACCELERATE_BOOTSTRAPPED"] = "1"
-    child_env["TRAIN_EXTRA_ARGS_FORWARDED"] = "1"
+    command = build_accelerate_launch_command(
+        cfg,
+        script_path=Path(__file__).resolve(),
+        script_args=argv,
+    )
+    child_env = build_accelerate_launch_env()
     os.execvpe(sys.executable, command, child_env)
 
 
