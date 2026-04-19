@@ -128,6 +128,18 @@ spec:
             duration: 120s
         - analysis:
             templates:
-              - templateName: recipe-triton-analysis
+              - templateName: recipe-model-analysis
+            args:
+            - name: model-version
+              value: "{{ .Values.triton.image.tag }}"  
+        - setWeight: 50
+        - pause:
+            duration: 120s
+        - analysis:
+            templates:
+              - templateName: recipe-model-analysis
+            args:
+            - name: model-version
+              value: "{{ .Values.triton.image.tag }}"
         - setWeight: 100
 {{- end }}
