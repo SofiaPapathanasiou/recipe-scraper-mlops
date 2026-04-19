@@ -34,8 +34,8 @@ spec:
 
               source /openrc/openrc
 
-              MODEL_CONTAINER="proj22-mlflow-artifacts"
-              MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
+              MODEL_CONTAINER="ObjStore_proj22"
+              MODEL_PREFIX="1/199063f1ce644649908972d338dc1017/artifacts/checkpoints/best"
 
               rm -rf /models/recipe_model
               mkdir -p /models/recipe_model/1
