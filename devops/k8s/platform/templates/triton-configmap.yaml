@@ -29,7 +29,7 @@ data:
     instance_group [
       {
         count: 1
-        kind: KIND_CPU
+        kind: KIND_GPU
       }
     ]
 
@@ -63,7 +63,7 @@ data:
             self.model.to(self.device)
             self.model.eval()
             self.max_input_length = 256
-            self.max_output_length = 64
+            self.max_output_length = 256
 
         def _to_text_list(self, input_array):
             texts = []
