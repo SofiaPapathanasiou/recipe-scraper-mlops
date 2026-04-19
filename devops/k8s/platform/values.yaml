@@ -33,10 +33,14 @@ mlflow:
   allowedHosts: "*"
   s3:
     endpointUrl: "https://chi.tacc.chameleoncloud.org:7480"
-    existingSecret: ""
+    existingSecret: "mlflow-s3-credentials"
     accessKeyId: ""
     secretAccessKey: ""
-    bucketName: ""
+    bucketName: "ObjStore_proj22"
+    region: ""
+    caBundle: ""
+    preflight:
+      enabled: true
   resources:
     requests:
       memory: "1Gi"
@@ -81,24 +85,64 @@ data:
 trainingJob:
   enabled: false
   backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: null
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}
+  nodeSelector:
+    kubernetes.io/hostname: gpu-node
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   image:
+    # `fullName` lets the chart use a fully-qualified image reference
+    # such as ghcr.io/org/recipe-scraper-training:sha-abc123.
+    fullName: ""
     repository: recipe-scraper-training
     tag: "latest"
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  mlflowPreflight:
+    enabled: true
+    checkArtifactStore: true
+    artifactCredentialsSecret: ""
+  modelCache:
+    prewarmEnabled: false
+  storage:
+    enabled: true
+    # Legacy catch-all root for datasets and training outputs.
+    # Prefer the split mount paths below when those locations need to diverge.
+    mountPath: /data
+    # Optional explicit mount points for the shared training volume.
+    # When set, the chart mounts the same volume at each distinct path.
+    datasetMountPath: /data
+    checkpointMountPath: /data/checkpoints
+    hfCacheMountPath: /data/checkpoints/huggingface-cache
   env:
     trainScript: /app/train.py
-    trainConfig: /app/config.yaml
+    trainConfig: /app/config/config.yaml
     trainMode: train
-    accelerateConfigFile: /app/accelerate_config.yaml
+    dataDir: /data
+    trainJsonlPath: ""
+    evalJsonlPath: ""
+    checkpointDir: /data/checkpoints/recipe-correction
+    # Keep the Hugging Face model cache on the mounted training volume so
+    # first-run downloads are reusable across later Jobs.
+    hfCacheDir: /data/checkpoints/huggingface-cache
     numProcesses: "1"
     extraArgs: ""
   resources:
     requests:
       memory: "2Gi"
       cpu: "500m"
+      nvidia.com/gpu: 1
     limits:
       memory: "6Gi"
       cpu: "2"
+      nvidia.com/gpu: 1
 
 triton:
   enabled: true
