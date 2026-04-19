@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
       - name: mealie
-        image: graceritamcgrath/mealie-custom:latest
+        image: graceritamcgrath/mealie-custom:v1.2
         ports:
         - containerPort: 9000
         resources:
@@ -44,6 +44,14 @@ spec:
           value: "1000"
         - name: TZ
           value: "America/New_York"
+        - name: TRITON_SERVER_URL
+          value: {{ .Values.triton.serviceURL | quote }}
+        - name: TRITON_MODEL_NAME
+          value: {{ .Values.triton.modelName | quote }}
+        - name: API_DOCS
+          value: "true"
+        - name: MODEL_VERSION
+          value: "v1.2"
         volumeMounts:
         - name: mealie-data
           mountPath: /app/data

@@ -9,3 +9,6 @@ resources:
   requests:
     cpu: "500m"
     memory: "512Mi"
+triton:
+  serviceURL: "http://recipe-triton-svc.recipe-scraper-platform.svc.cluster.local:8000"
+  modelName: "recipe_model"
