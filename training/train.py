@@ -141,12 +141,6 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     global_step = 0
     train_loss_accumulator = 0.0
     train_loss_window_count = 0
-    resolved_mlflow_tracking_uri = resolve_mlflow_tracking_uri(config_dict)
-    debug_log(
-        accelerator,
-        f"Resolved MLflow tracking URI: {resolved_mlflow_tracking_uri}",
-        section="MLFLOW SETUP",
-    )
     run_id = maybe_start_mlflow_run(
         config_dict,
         train_dataset,

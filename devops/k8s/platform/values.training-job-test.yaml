@@ -1,0 +1,37 @@
+namespace:
+  create: true
+
+data:
+  trainingQuality:
+    enabled: false
+  driftMonitor:
+    enabled: false
+
+triton:
+  enabled: false
+
+prometheus:
+  enabled: false
+
+grafana:
+  enabled: false
+
+mlflow:
+  s3:
+    preflight:
+      enabled: false
+
+trainingJob:
+  enabled: true
+  image:
+    fullName: recipe-training
+    pullPolicy: Never
+  mlflowPreflight:
+    enabled: false
+    checkArtifactStore: false
+  env:
+    trainJsonlPath: /data/train.jsonl
+    evalJsonlPath: /data/eval.jsonl
+    numProcesses: "1"
+    checkpointDir: /data/checkpoints/recipe-correction
+    hfCacheDir: /data/checkpoints/huggingface-cache

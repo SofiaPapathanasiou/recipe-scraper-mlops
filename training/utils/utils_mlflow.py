@@ -94,7 +94,20 @@ def resolve_mlflow_operation_timeout_seconds() -> float:
     )
 
 
-def run_with_timeout(operation_name: str, timeout_seconds: float, fn: Any, *args: Any, **kwargs: Any) -> Any:
+def run_with_timeout(
+    operation_name: str,
+    timeout_seconds: float,
+    fn: Any,
+    *args: Any,
+    use_worker_thread: bool = True,
+    **kwargs: Any,
+) -> Any:
+    # MLflow tracks the active run in thread-local state. Operations that depend on that
+    # context, such as `start_run()` and fluent artifact logging, must stay on the caller
+    # thread or MLflow may create implicit runs with generated names.
+    if not use_worker_thread:
+        return fn(*args, **kwargs)
+
     result: dict[str, Any] = {}
     error: dict[str, BaseException] = {}
 
@@ -226,6 +239,7 @@ def log_temp_artifact(content: str, filename: str, artifact_path: str | None = N
                 operation_timeout,
                 mlflow.log_artifact,
                 str(artifact_file),
+                use_worker_thread=False,
             )
         else:
             run_with_timeout(
@@ -233,6 +247,7 @@ def log_temp_artifact(content: str, filename: str, artifact_path: str | None = N
                 operation_timeout,
                 mlflow.log_artifact,
                 str(artifact_file),
+                use_worker_thread=False,
                 artifact_path=artifact_path,
             )
 
@@ -584,48 +599,38 @@ def maybe_start_mlflow_run(
     tracking_uri = resolve_mlflow_tracking_uri(cfg)
     api_precheck_timeout = resolve_mlflow_api_precheck_timeout_seconds()
     operation_timeout = resolve_mlflow_operation_timeout_seconds()
-    debug_log(
-        accelerator,
-        (
-            f"MLflow startup diagnostics: experiment_name={experiment_name}, "
-            f"api_precheck_timeout={api_precheck_timeout:.1f}s, operation_timeout={operation_timeout:.1f}s"
-        ),
-    )
+    # debug_log(
+    #     accelerator,
+    #     (
+    #         f"MLflow startup diagnostics: experiment_name={experiment_name}, "
+    #         f"api_precheck_timeout={api_precheck_timeout:.1f}s, operation_timeout={operation_timeout:.1f}s"
+    #     ),
+    # )
     probe_status, probe_body = probe_mlflow_api(cfg, experiment_name, api_precheck_timeout)
-    debug_log(
-        accelerator,
-        (
-            "MLflow API probe completed before client startup: "
-            f"{format_mlflow_probe_summary(probe_status, probe_body)}"
-        ),
-    )
-    debug_log(accelerator, f"MLflow: set_tracking_uri({tracking_uri})")
+    # debug_log(
+    #     accelerator,
+    #     (
+    #         "MLflow API probe completed before client startup: "
+    #         f"{format_mlflow_probe_summary(probe_status, probe_body)}"
+    #     ),
+    # )
     mlflow.set_tracking_uri(tracking_uri)
     experiment_id = ensure_mlflow_experiment(
         cfg,
         experiment_name,
         timeout_seconds=operation_timeout,
-        status_logger=lambda message: debug_log(accelerator, message),
+        # status_logger=lambda message: debug_log(accelerator, message),
     )
-    debug_log(accelerator, f"MLflow: set_experiment(experiment_id={experiment_id})")
     mlflow.set_experiment(experiment_id=experiment_id)
-    debug_log(
-        accelerator,
-        (
-            "MLflow: start_run("
-            f"run_name={context.mlflow_run_name!r}, nested={context.mlflow_nested}, "
-            f"parent_run_id={context.mlflow_parent_run_id!r})"
-        ),
-    )
     run = run_with_timeout(
         "start_run",
         operation_timeout,
         mlflow.start_run,
+        use_worker_thread=False,
         run_name=context.mlflow_run_name,
         nested=context.mlflow_nested,
         parent_run_id=context.mlflow_parent_run_id,
     )
-    debug_log(accelerator, f"MLflow: start_run completed with run_id={run.info.run_id}")
     mlflow.set_tag("mlflow.runName", format_mlflow_run_name(run.info.run_id))
 
     environment_info = log_environment_info()
@@ -639,26 +644,17 @@ def maybe_start_mlflow_run(
         warmup_steps,
         trainable_params,
     )
-    debug_log(accelerator, f"MLflow: log_params(config_params={len(flat_params)})")
     mlflow.log_params(sanitize_mlflow_params(flat_params))
     if context.trial_params:
-        debug_log(accelerator, f"MLflow: log_params(trial_params={len(context.trial_params)})")
         mlflow.log_params(
             sanitize_mlflow_params(
                 {f"trial_param.{key}": value for key, value in context.trial_params.items()}
             )
         )
-    debug_log(accelerator, "MLflow: set_tags(runtime metadata)")
     mlflow.set_tags(build_mlflow_run_tags(cfg, context, status="running", environment_info=environment_info))
-    debug_log(accelerator, "MLflow: log_artifact(model_summary)")
     log_model_summary(accelerator.unwrap_model(model))
-    debug_log(accelerator, "MLflow: log_artifact(model_summary) completed")
-    debug_log(accelerator, "MLflow: log_artifact(runtime/environment.yaml)")
     log_yaml_artifact(environment_info, "environment.yaml", artifact_path="runtime")
-    debug_log(accelerator, "MLflow: log_artifact(runtime/environment.yaml) completed")
-    debug_log(accelerator, "MLflow: log_artifact(config/resolved_config.yaml)")
     log_yaml_artifact(cfg, "resolved_config.yaml", artifact_path="config")
-    debug_log(accelerator, "MLflow: log_artifact(config/resolved_config.yaml) completed")
     if context.mode == "tune":
         log_optuna_search_space_artifacts(cfg, experiment_name)
     return run.info.run_id
@@ -694,7 +690,7 @@ def maybe_log_best_model_to_mlflow_registry(
     best_model = AutoModelForSeq2SeqLM.from_pretrained(best_checkpoint)
     model_info = mlflow.pytorch.log_model(
         pytorch_model=best_model,
-        artifact_path="best-model",
+        name="best-model",
         registered_model_name=registered_model_name,
     )
     return {
