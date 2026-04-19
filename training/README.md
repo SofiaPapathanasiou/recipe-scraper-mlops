@@ -167,6 +167,11 @@ Key environment variables:
 - `NUM_PROCESSES`: number of Accelerate processes or tune trial worker count; `auto` uses visible GPU count
 - `MLFLOW_TRACKING_URI`: remote tracking server override
 
+Precision is also configurable in the YAML file through `accelerate.mixed_precision`.
+Supported values are `no`, `fp16`, `bf16`, and `fp8`. The config value is now used by
+the training worker directly, while `ACCELERATE_MIXED_PRECISION` can still override it
+when you need an environment-level override for a specific run.
+
 With `checkpointing.save_intermediate_checkpoints: false`, training now persists only the
 current best checkpoint locally under `<checkpoint_dir>/<run_id-or-manual-run>/best` so it
 survives container or pod crashes before the final MLflow artifact upload.
@@ -195,17 +200,25 @@ Use this base `docker run` command for direct container launches:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   recipe-training
 ```
+
+In this repo, the JSONL datasets live under the repo-level [`data/`](/home/cc/recipe-scraper-mlops/data) directory,
+so the `docker run` examples mount `$(pwd)/data` to `/app/data`. They also mount the
+repo `.git` directory to `/app/.git` so MLflow tagging can resolve the current commit hash.
 
 The entrypoint is [`scripts/run_training.sh`](/home/cc/recipe-scraper-mlops/training/scripts/run_training.sh), so the
 container is configured through environment variables. The user-facing controls are:
 
 - `-e TRAIN_MODE=train|tune`
 - `-e TRAIN_CONFIG=/app/config/<file>.yaml`
+- `-e TRAINING_DATA_DIR=/app/data`
+- `-e TRAIN_JSONL_PATH=/app/data/train.jsonl`
+- `-e EVAL_JSONL_PATH=/app/data/eval.jsonl`
 - `-e NUM_PROCESSES=<n>`
 - `-e MLFLOW_TRACKING_URI=<uri>`
 - `-e TRAIN_EXTRA_ARGS="--experiment-name <name>"`
@@ -218,7 +231,8 @@ Run standard training:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   recipe-training
@@ -230,7 +244,8 @@ Run tune mode:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e TRAIN_MODE=tune \
@@ -243,7 +258,8 @@ Use a different config file:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e TRAIN_CONFIG=/app/config/config.t5-small.yaml \
@@ -256,7 +272,8 @@ Override Accelerate process count:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e NUM_PROCESSES=1 \
@@ -269,7 +286,8 @@ Override the MLflow tracking server:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
@@ -282,7 +300,8 @@ Pass the forwarded `train.py` flag:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e 'TRAIN_EXTRA_ARGS=--experiment-name my-experiment' \
@@ -295,7 +314,8 @@ Combine multiple flags in one run:
 docker run --rm -it \
   --gpus all \
   -v "$(pwd)/training:/app" \
-  -v "$(pwd)/training/data:/app/data" \
+  -v "$(pwd)/.git:/app/.git:ro" \
+  -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/training/checkpoints:/app/checkpoints" \
   --env-file training/.env \
   -e TRAIN_MODE=tune \
@@ -305,6 +325,29 @@ docker run --rm -it \
   -e 'TRAIN_EXTRA_ARGS=--experiment-name recipe-tuning' \
   recipe-training
 ```
+
+Run tune mode with explicit dataset file paths:
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -v /home/cc/recipe-scraper-mlops/training:/app \
+  -v /home/cc/recipe-scraper-mlops/.git:/app/.git:ro \
+  -v /home/cc/recipe-scraper-mlops/data:/app/data \
+  -v /home/cc/recipe-scraper-mlops/training/checkpoints:/app/checkpoints \
+  --env-file /home/cc/recipe-scraper-mlops/training/.env \
+  -e TRAIN_MODE=tune \
+  -e TRAIN_CONFIG=/app/config/config.t5-base.yaml \
+  -e TRAIN_JSONL_PATH=/app/data/train.jsonl \
+  -e EVAL_JSONL_PATH=/app/data/eval.jsonl \
+  -e 'TRAIN_EXTRA_ARGS=--experiment-name T5-Small-BF16-Tune' \
+  recipe-training
+```
+
+Use `TRAINING_DATA_DIR` when `train.jsonl` and `eval.jsonl` live together in the same
+directory. Use `TRAIN_JSONL_PATH` and `EVAL_JSONL_PATH` when you want the paths to be
+fully explicit or when the files are not being discovered where you expect. If you
+cannot mount `.git`, you can also set `GIT_COMMIT_HASH` explicitly to preserve commit tagging.
 
 The container entrypoint does not forward positional arguments from `docker run image ...`.
 If you want to pass `train.py` CLI flags, use `TRAIN_EXTRA_ARGS`. The public `train.py`

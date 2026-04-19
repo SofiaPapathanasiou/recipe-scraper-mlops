@@ -26,6 +26,7 @@ from .utils_core import (
     resolve_accelerate_config_path,
     resolve_default_config_path,
     resolve_hf_cache_dir,
+    resolve_mixed_precision,
     resolve_mlflow_tracking_uri,
     resolve_model_source,
     resolve_num_processes,

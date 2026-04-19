@@ -170,6 +170,24 @@ def resolve_num_processes(cfg: dict[str, Any]) -> int:
     return min(parsed, available_gpu_count)
 
 
+def resolve_mixed_precision(cfg: dict[str, Any]) -> str:
+    requested = os.getenv("ACCELERATE_MIXED_PRECISION")
+    if requested is None or requested.strip() == "":
+        requested = cfg.get("accelerate", {}).get("mixed_precision", "no")
+
+    requested_text = str(requested).strip().lower()
+    if requested_text == "":
+        requested_text = "no"
+
+    valid_values = {"no", "fp16", "bf16", "fp8"}
+    if requested_text not in valid_values:
+        raise ValueError(
+            "mixed precision must be one of "
+            f"{sorted(valid_values)}, got {requested!r}."
+        )
+    return requested_text
+
+
 def ensure_mlflow_experiment(cfg: dict[str, Any], experiment_name: str) -> str:
     tracking_uri = resolve_mlflow_tracking_uri(cfg)
     client = MlflowClient(tracking_uri=tracking_uri)

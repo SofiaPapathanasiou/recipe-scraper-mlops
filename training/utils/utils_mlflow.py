@@ -249,7 +249,7 @@ def find_git_repo_root(start_path: Path) -> Path | None:
 
     try:
         result = subprocess.run(
-            ["git", "-C", str(start_path), "rev-parse", "--show-toplevel"],
+            ["git", "-c", "safe.directory=*", "-C", str(start_path), "rev-parse", "--show-toplevel"],
             check=True,
             capture_output=True,
             text=True,
@@ -262,11 +262,20 @@ def find_git_repo_root(start_path: Path) -> Path | None:
 
 def log_environment_info() -> dict[str, str]:
     def git_commit_hash() -> str:
+        env_commit = (
+            os.getenv("GIT_COMMIT_HASH")
+            or os.getenv("GIT_COMMIT")
+            or os.getenv("COMMIT_SHA")
+            or os.getenv("CI_COMMIT_SHA")
+        )
+        if env_commit:
+            return env_commit.strip() or "unknown"
+
         try:
             repo_root = find_git_repo_root(Path(__file__).resolve().parent)
-            git_cmd = ["git", "rev-parse", "HEAD"]
+            git_cmd = ["git", "-c", "safe.directory=*", "rev-parse", "HEAD"]
             if repo_root is not None:
-                git_cmd = ["git", "-C", str(repo_root), "rev-parse", "HEAD"]
+                git_cmd = ["git", "-c", "safe.directory=*", "-C", str(repo_root), "rev-parse", "HEAD"]
             result = subprocess.run(
                 git_cmd,
                 check=True,

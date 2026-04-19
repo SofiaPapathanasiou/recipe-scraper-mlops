@@ -1,3 +1,4 @@
+import json
 import copy
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ from .utils_core import (
     load_progress_updates,
     resolve_accelerate_config_path,
     resolve_hf_cache_dir,
+    resolve_tune_num_processes,
     sanitize_study_name,
     serialize_training_context,
     set_nested_value,

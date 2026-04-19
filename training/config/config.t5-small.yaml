@@ -11,7 +11,7 @@ training:
   weight_decay: 0.01
   num_epochs: 5
   per_device_train_batch_size: 64
-  per_device_eval_batch_size: 128
+  per_device_eval_batch_size: 256
   gradient_accumulation_steps: 1
   warmup_ratio: 0.10
   max_grad_norm: 1.0
@@ -21,6 +21,7 @@ accelerate:
   compute_environment: LOCAL_MACHINE
   distributed_type: MULTI_GPU
   num_processes: auto
+  # Primary precision knob for train and tune runs.
   mixed_precision: bf16
   dynamo_backend: "no"
 
@@ -38,9 +39,13 @@ evaluation:
 checkpointing:
   checkpoint_dir: /app/checkpoints/recipe-correction
   load_best_model_at_end: true
+  # When false, only the best checkpoint is kept locally under
+  # <checkpoint_dir>/<run_id-or-manual-run>/best for crash-safe recovery.
   save_intermediate_checkpoints: false
 
 huggingface:
+  # Local dev uses the bind-mounted checkpoints volume at /app/checkpoints.
+  # The Kubernetes Job overrides this to /data/checkpoints/huggingface-cache.
   cache_dir: /app/checkpoints/huggingface-cache
 
 mlflow:
@@ -58,7 +63,8 @@ data:
   train_file: train.jsonl
   eval_file: eval.jsonl
   data_dir:
-  num_workers: auto
-  prefetch_factor: 2
+  # Keep evaluation fed on larger GPUs like H100 while staying reasonable on shared hosts.
+  num_workers: 8
+  prefetch_factor: 4
   mock_train_size: 200
   mock_val_size: 40
