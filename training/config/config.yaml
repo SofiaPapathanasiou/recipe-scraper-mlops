@@ -3,15 +3,15 @@ model:
   task_prefix: "fix recipe: "
 
 tokenization:
-  max_input_length: 256
-  max_target_length: 256
+  max_input_length: 512
+  max_target_length: 512
 
 training:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   num_epochs: 5
-  per_device_train_batch_size: 64
-  per_device_eval_batch_size: 256
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 128
   gradient_accumulation_steps: 1
   warmup_ratio: 0.10
   max_grad_norm: 1.0
@@ -31,7 +31,11 @@ runtime:
 
 evaluation:
   logging_steps: 50
-  every_n_epochs: 2
+  every_n_epochs: 1
+  full_generation_every_n_epochs: 3
+  interim_max_eval_batches: 8
+  full_max_eval_batches:
+  generation_max_new_tokens: 256
   run_on_last_epoch: true
   eval_steps: 500
   metric_for_best_model: eval_rougeL
@@ -52,6 +56,9 @@ mlflow:
   tracking_uri: http://192.168.1.11:30800/
   experiment_name: recipe-correction-t5-baseline
   tuning_experiment_name: recipe-correction-t5-optuna
+  # Keep training successful when the final MLflow artifact upload flakes out after the
+  # best checkpoint has already been saved locally. Set true to make uploads strict.
+  fail_on_artifact_logging_error: false
 
 model_registry:
   log_to_mlflow_model_registry: true

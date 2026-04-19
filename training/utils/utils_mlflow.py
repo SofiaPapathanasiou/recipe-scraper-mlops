@@ -76,6 +76,10 @@ MLFLOW_RUN_PARAM_ALLOWLIST = [
     "training.warmup_ratio",
     "training.seed",
     "evaluation.every_n_epochs",
+    "evaluation.full_generation_every_n_epochs",
+    "evaluation.interim_max_eval_batches",
+    "evaluation.full_max_eval_batches",
+    "evaluation.generation_max_new_tokens",
     "evaluation.metric_for_best_model",
 ]
 

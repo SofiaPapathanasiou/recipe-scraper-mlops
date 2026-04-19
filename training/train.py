@@ -143,6 +143,9 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
     objective_metric_name = context.objective_metric_name or config_dict["evaluation"]["metric_for_best_model"]
     objective_direction = context.objective_direction or infer_metric_direction(objective_metric_name)
     evaluation_every_n_epochs = max(1, int(config_dict["evaluation"].get("every_n_epochs", 1)))
+    full_generation_every_n_epochs = max(
+        1, int(config_dict["evaluation"].get("full_generation_every_n_epochs", evaluation_every_n_epochs))
+    )
     evaluate_on_last_epoch = bool(config_dict["evaluation"].get("run_on_last_epoch", True))
     best_metric = initial_best_metric(objective_direction)
     best_checkpoint: str | None = None
@@ -297,11 +300,41 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 f"Epoch {epoch} training phase finished in {epoch_time:.2f}s. Starting evaluation.",
                 section=f"EPOCH {epoch} EVALUATION",
             )
-            eval_metrics = evaluate(model, val_loader, tokenizer, accelerator, config_dict)
+            should_run_full_generation = (
+                epoch % full_generation_every_n_epochs == 0
+                or (evaluate_on_last_epoch and epoch == config_dict["training"]["num_epochs"])
+            )
+            if should_run_full_generation:
+                max_eval_batches = config_dict["evaluation"].get("full_max_eval_batches")
+                generation_max_new_tokens = int(
+                    config_dict["evaluation"].get(
+                        "generation_max_new_tokens",
+                        config_dict["tokenization"]["max_target_length"],
+                    )
+                )
+            else:
+                max_eval_batches = config_dict["evaluation"].get("interim_max_eval_batches")
+                generation_max_new_tokens = None
+            if max_eval_batches is not None:
+                max_eval_batches = max(1, int(max_eval_batches))
+
+            eval_metrics = evaluate(
+                model,
+                val_loader,
+                tokenizer,
+                accelerator,
+                config_dict,
+                compute_generation=should_run_full_generation,
+                max_eval_batches=max_eval_batches,
+                generation_max_new_tokens=generation_max_new_tokens,
+            )
             accelerator.wait_for_everyone()
 
             epoch_metrics.update(eval_metrics)
-            current_metric = epoch_metrics[objective_metric_name]
+            current_metric = epoch_metrics.get(objective_metric_name)
+            epoch_metrics["evaluation_generation_enabled"] = 1.0 if should_run_full_generation else 0.0
+            if max_eval_batches is not None:
+                epoch_metrics["evaluation_max_eval_batches"] = float(max_eval_batches)
             debug_log(
                 accelerator,
                 f"Evaluation summary for epoch {epoch}: {json.dumps(epoch_metrics, sort_keys=True)}",
@@ -314,12 +347,13 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         "global_step": global_step,
                         "current_metric": current_metric,
                         "objective_metric_name": objective_metric_name,
+                        "objective_metric_available": current_metric is not None,
                         "metrics": epoch_metrics,
                     },
                 )
 
             prune_requested = False
-            if accelerator.is_main_process and context.trial is not None:
+            if accelerator.is_main_process and context.trial is not None and current_metric is not None:
                 context.trial.report(current_metric, step=epoch)
                 mlflow.log_metric("objective_value", current_metric, step=global_step)
                 if context.trial.should_prune():
@@ -331,7 +365,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         objective_direction=objective_direction,
                         current_metric=current_metric,
                     )
-            if accelerator.is_main_process and prune_requested_via_file(context):
+            if accelerator.is_main_process and prune_requested_via_file(context) and current_metric is not None:
                 prune_requested = True
                 mark_mlflow_run_pruned(
                     epoch=epoch,
@@ -351,6 +385,14 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     main_process_only=False,
                 )
                 raise optuna.TrialPruned(f"Trial pruned at epoch {epoch} with {objective_metric_name}={current_metric:.4f}")
+            if current_metric is None:
+                debug_log(
+                    accelerator,
+                    (
+                        f"Skipping objective-based best-model updates for epoch {epoch} because "
+                        f"{objective_metric_name} was not computed in this cheap evaluation pass."
+                    ),
+                )
 
             checkpoint_path: str | None = None
             if save_intermediate_checkpoints:
@@ -376,7 +418,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     section=f"EPOCH {epoch} COMPLETE",
                 )
 
-            is_new_best = is_better_metric(current_metric, best_metric, objective_direction)
+            is_new_best = current_metric is not None and is_better_metric(current_metric, best_metric, objective_direction)
             if is_new_best:
                 best_metric = current_metric
                 if save_intermediate_checkpoints:
@@ -392,7 +434,8 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
 
             if accelerator.is_main_process:
                 mlflow.log_metrics(epoch_metrics, step=global_step)
-                mlflow.log_metric("objective_value", current_metric, step=global_step)
+                if current_metric is not None:
+                    mlflow.log_metric("objective_value", current_metric, step=global_step)
 
                 if is_new_best:
                     mlflow.log_metric(
@@ -418,11 +461,56 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 step=global_step,
             )
             experiment_name = context.mlflow_experiment_name or get_mlflow_experiment_name(config_dict, context.mode)
-            logged_checkpoint_info = log_best_checkpoint_artifacts(best_checkpoint)
-            mlflow_registry_info = maybe_log_best_model_to_mlflow_registry(
-                config_dict,
-                best_checkpoint,
+            fail_on_artifact_logging_error = bool(
+                config_dict.get("mlflow", {}).get("fail_on_artifact_logging_error", False)
             )
+            artifact_warnings: list[str] = []
+            logged_checkpoint_info = None
+            mlflow_registry_info = None
+
+            try:
+                logged_checkpoint_info = log_best_checkpoint_artifacts(best_checkpoint)
+                if logged_checkpoint_info is not None:
+                    mlflow.set_tag("artifact_upload.best_checkpoint.status", "ok")
+            except Exception as error:
+                warning_message = (
+                    "Best checkpoint artifact upload to MLflow failed; "
+                    f"keeping local checkpoint at {best_checkpoint}. Error: {error}"
+                )
+                artifact_warnings.append(warning_message)
+                mlflow.set_tag("artifact_upload.best_checkpoint.status", "failed")
+                mlflow.set_tag("artifact_upload.best_checkpoint.error", str(error)[:5000])
+                debug_log(
+                    accelerator,
+                    warning_message,
+                    section="MLFLOW ARTIFACT WARNING",
+                )
+                if fail_on_artifact_logging_error:
+                    raise
+
+            try:
+                mlflow_registry_info = maybe_log_best_model_to_mlflow_registry(
+                    config_dict,
+                    best_checkpoint,
+                )
+                if mlflow_registry_info is not None:
+                    mlflow.set_tag("artifact_upload.model_registry.status", "ok")
+            except Exception as error:
+                warning_message = (
+                    "MLflow model registry upload failed; "
+                    f"keeping local checkpoint at {best_checkpoint}. Error: {error}"
+                )
+                artifact_warnings.append(warning_message)
+                mlflow.set_tag("artifact_upload.model_registry.status", "failed")
+                mlflow.set_tag("artifact_upload.model_registry.error", str(error)[:5000])
+                debug_log(
+                    accelerator,
+                    warning_message,
+                    section="MLFLOW REGISTRY WARNING",
+                )
+                if fail_on_artifact_logging_error:
+                    raise
+
             if logged_checkpoint_info is not None:
                 log_json_artifact(
                     {
@@ -439,6 +527,16 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                     },
                     "best_model_pointer.json",
                     artifact_path="model_registry",
+                )
+            if artifact_warnings:
+                log_json_artifact(
+                    {
+                        "warnings": artifact_warnings,
+                        "best_checkpoint_local_path": best_checkpoint,
+                        "fail_on_artifact_logging_error": fail_on_artifact_logging_error,
+                    },
+                    "artifact_upload_warnings.json",
+                    artifact_path="runtime",
                 )
             mlflow.set_tags(build_mlflow_run_tags(config_dict, context, status="complete"))
             emit_console_summary(
@@ -460,10 +558,15 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         logged_checkpoint_info["artifact_path"] if logged_checkpoint_info is not None else "none"
                     ),
                     "total_training_time_sec": total_training_time,
-                    "best_model_storage": "mlflow-artifacts+mlflow-model-registry",
+                    "best_model_storage": (
+                        "mlflow-artifacts+mlflow-model-registry"
+                        if logged_checkpoint_info is not None and mlflow_registry_info is not None
+                        else "local-checkpoint-only"
+                    ),
                     "mlflow_registered_model_name": (
                         mlflow_registry_info["registered_model_name"] if mlflow_registry_info is not None else "none"
                     ),
+                    "artifact_warnings": len(artifact_warnings),
                 },
             )
             if final_metrics:

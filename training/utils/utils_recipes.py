@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -5,9 +6,12 @@ from typing import Any
 
 import torch
 from accelerate import Accelerator
+from datasets import Dataset as HFDataset
+from datasets import load_dataset, load_from_disk
 from torch.utils.data import DataLoader, Dataset
+from transformers import DataCollatorForSeq2Seq
 
-from .utils_core import resolve_model_source
+from .utils_core import resolve_hf_cache_dir, resolve_model_source
 
 MOCK_RECIPE_BLUEPRINTS = [
     {
@@ -334,24 +338,18 @@ class RecipeTextDataset(Dataset):
         model_inputs = self.tokenizer(
             self.inputs[index],
             max_length=self.max_input_length,
-            padding="max_length",
             truncation=True,
-            return_tensors="pt",
         )
         labels = self.tokenizer(
             self.targets[index],
             max_length=self.max_target_length,
-            padding="max_length",
             truncation=True,
-            return_tensors="pt",
         ).input_ids
-        # T5 ignores labels set to -100 when computing the loss.
-        labels[labels == self.tokenizer.pad_token_id] = -100
 
         return {
-            "input_ids": model_inputs.input_ids.squeeze(0),
-            "attention_mask": model_inputs.attention_mask.squeeze(0),
-            "labels": labels.squeeze(0),
+            "input_ids": model_inputs["input_ids"],
+            "attention_mask": model_inputs["attention_mask"],
+            "labels": labels,
         }
 
 
@@ -378,6 +376,8 @@ class JsonlRecipeDataset(Dataset):
         self,
         dataset_path: str,
         tokenizer: Any,
+        cfg: dict[str, Any],
+        accelerator: Accelerator,
         task_prefix: str,
         max_input_length: int,
         max_target_length: int,
@@ -385,88 +385,173 @@ class JsonlRecipeDataset(Dataset):
         self.dataset_path = Path(dataset_path).expanduser()
         if not self.dataset_path.exists():
             raise FileNotFoundError(f"Dataset file not found: {self.dataset_path}")
-
-        self.tokenizer = tokenizer
-        self.task_prefix = task_prefix
-        self.max_input_length = max_input_length
-        self.max_target_length = max_target_length
-        self._offsets = self._index_file()
-        self._file_handle: Any = None
-
-    def _index_file(self) -> list[int]:
-        offsets: list[int] = []
-        with open(self.dataset_path, "rb") as handle:
-            while True:
-                offset = handle.tell()
-                line = handle.readline()
-                if not line:
-                    break
-                if line.strip():
-                    offsets.append(offset)
-        if not offsets:
-            raise ValueError(f"Dataset file is empty: {self.dataset_path}")
-        return offsets
-
-    def _get_file_handle(self) -> Any:
-        if self._file_handle is None or self._file_handle.closed:
-            self._file_handle = open(self.dataset_path, "r", encoding="utf-8")
-        return self._file_handle
-
-    def _load_record(self, index: int) -> tuple[str, str]:
-        handle = self._get_file_handle()
-        handle.seek(self._offsets[index])
-        raw_line = handle.readline()
-        try:
-            payload = json.loads(raw_line)
-        except json.JSONDecodeError as error:
-            raise ValueError(
-                f"Invalid JSON in {self.dataset_path} at dataset index {index}: {error}"
-            ) from error
-
-        if not isinstance(payload, dict):
-            raise ValueError(f"Expected an object in {self.dataset_path} at dataset index {index}.")
-        if "input" not in payload or "target" not in payload:
-            raise ValueError(
-                f"Expected 'input' and 'target' keys in {self.dataset_path} at dataset index {index}."
-            )
-
-        input_text = payload["input"]
-        target_text = payload["target"]
-        if not isinstance(input_text, str) or not isinstance(target_text, str):
-            raise ValueError(
-                f"Expected string 'input' and 'target' values in {self.dataset_path} at dataset index {index}."
-            )
-        return maybe_prepend_task_prefix(input_text, self.task_prefix), target_text
+        self.dataset = load_or_create_tokenized_jsonl_dataset(
+            dataset_path=self.dataset_path,
+            tokenizer=tokenizer,
+            cfg=cfg,
+            accelerator=accelerator,
+            task_prefix=task_prefix,
+            max_input_length=max_input_length,
+            max_target_length=max_target_length,
+        )
 
     def __len__(self) -> int:
-        return len(self._offsets)
+        return len(self.dataset)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        input_text, target_text = self._load_record(index)
-        model_inputs = self.tokenizer(
-            input_text,
-            max_length=self.max_input_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-        labels = self.tokenizer(
-            target_text,
-            max_length=self.max_target_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids
-        labels[labels == self.tokenizer.pad_token_id] = -100
-
+        record = self.dataset[index]
         return {
-            "input_ids": model_inputs.input_ids.squeeze(0),
-            "attention_mask": model_inputs.attention_mask.squeeze(0),
-            "labels": labels.squeeze(0),
+            "input_ids": record["input_ids"],
+            "attention_mask": record["attention_mask"],
+            "labels": record["labels"],
         }
 
 
-def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Dataset]:
+def resolve_tokenized_dataset_cache_root(cfg: dict[str, Any]) -> Path:
+    configured = cfg.get("data", {}).get("tokenized_cache_dir")
+    if configured:
+        return Path(str(configured)).expanduser()
+    return resolve_hf_cache_dir(cfg) / "tokenized-recipes"
+
+
+def build_tokenized_dataset_cache_key(
+    dataset_path: Path,
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> str:
+    dataset_stat = dataset_path.stat()
+    fingerprint = {
+        "dataset_path": str(dataset_path.resolve()),
+        "dataset_size": dataset_stat.st_size,
+        "dataset_mtime_ns": dataset_stat.st_mtime_ns,
+        "tokenizer_name_or_path": str(getattr(tokenizer, "name_or_path", tokenizer.__class__.__name__)),
+        "tokenizer_class": tokenizer.__class__.__name__,
+        "task_prefix": task_prefix,
+        "max_input_length": max_input_length,
+        "max_target_length": max_target_length,
+    }
+    return hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def tokenize_recipe_batch(
+    batch: dict[str, list[Any]],
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> dict[str, list[list[int]]]:
+    inputs = batch.get("input")
+    targets = batch.get("target")
+    if not isinstance(inputs, list) or not isinstance(targets, list):
+        raise ValueError("Expected batched JSONL records with list-valued 'input' and 'target' columns.")
+    if len(inputs) != len(targets):
+        raise ValueError("Expected matching numbers of 'input' and 'target' values in a tokenization batch.")
+
+    normalized_inputs: list[str] = []
+    normalized_targets: list[str] = []
+    for input_text, target_text in zip(inputs, targets, strict=True):
+        if not isinstance(input_text, str) or not isinstance(target_text, str):
+            raise ValueError("Expected string 'input' and 'target' values in the JSONL dataset.")
+        normalized_inputs.append(maybe_prepend_task_prefix(input_text, task_prefix))
+        normalized_targets.append(target_text)
+
+    model_inputs = tokenizer(
+        normalized_inputs,
+        max_length=max_input_length,
+        truncation=True,
+    )
+    labels = tokenizer(
+        normalized_targets,
+        max_length=max_target_length,
+        truncation=True,
+    )
+    return {
+        "input_ids": model_inputs["input_ids"],
+        "attention_mask": model_inputs["attention_mask"],
+        "labels": labels["input_ids"],
+    }
+
+
+def create_tokenized_jsonl_dataset(
+    dataset_path: Path,
+    cache_path: Path,
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> None:
+    raw_dataset = load_dataset("json", data_files=str(dataset_path), split="train")
+    required_columns = {"input", "target"}
+    missing_columns = required_columns.difference(raw_dataset.column_names)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Expected JSONL dataset {dataset_path} to contain columns: {missing}.")
+
+    tokenized_dataset = raw_dataset.map(
+        lambda batch: tokenize_recipe_batch(
+            batch,
+            tokenizer=tokenizer,
+            task_prefix=task_prefix,
+            max_input_length=max_input_length,
+            max_target_length=max_target_length,
+        ),
+        batched=True,
+        remove_columns=raw_dataset.column_names,
+        desc=f"Tokenizing {dataset_path.name}",
+    )
+
+    if len(tokenized_dataset) == 0:
+        raise ValueError(f"Dataset file is empty: {dataset_path}")
+
+    temporary_cache_path = cache_path.with_name(f"{cache_path.name}.tmp-{os.getpid()}")
+    if temporary_cache_path.exists():
+        import shutil
+
+        shutil.rmtree(temporary_cache_path)
+    tokenized_dataset.save_to_disk(str(temporary_cache_path))
+    os.replace(temporary_cache_path, cache_path)
+
+
+def load_or_create_tokenized_jsonl_dataset(
+    dataset_path: Path,
+    tokenizer: Any,
+    cfg: dict[str, Any],
+    accelerator: Accelerator,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> HFDataset:
+    cache_root = resolve_tokenized_dataset_cache_root(cfg)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_key = build_tokenized_dataset_cache_key(
+        dataset_path=dataset_path,
+        tokenizer=tokenizer,
+        task_prefix=task_prefix,
+        max_input_length=max_input_length,
+        max_target_length=max_target_length,
+    )
+    cache_path = cache_root / f"{dataset_path.stem}-{cache_key}"
+
+    with accelerator.main_process_first():
+        if not cache_path.exists():
+            accelerator.print(f"Building tokenized dataset cache for {dataset_path} at {cache_path}.")
+            create_tokenized_jsonl_dataset(
+                dataset_path=dataset_path,
+                cache_path=cache_path,
+                tokenizer=tokenizer,
+                task_prefix=task_prefix,
+                max_input_length=max_input_length,
+                max_target_length=max_target_length,
+            )
+        else:
+            accelerator.print(f"Reusing tokenized dataset cache for {dataset_path} from {cache_path}.")
+
+    return load_from_disk(str(cache_path))
+
+
+def build_datasets(cfg: dict[str, Any], tokenizer: Any, accelerator: Accelerator) -> tuple[Dataset, Dataset]:
     data_source = cfg["data"]["source"]
     if data_source == "mock":
         return MockRecipeDataset(tokenizer, cfg, "train"), MockRecipeDataset(tokenizer, cfg, "val")
@@ -475,6 +560,8 @@ def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Datase
             JsonlRecipeDataset(
                 dataset_path=cfg["data"]["train_path"],
                 tokenizer=tokenizer,
+                cfg=cfg,
+                accelerator=accelerator,
                 task_prefix=cfg["model"]["task_prefix"],
                 max_input_length=cfg["tokenization"]["max_input_length"],
                 max_target_length=cfg["tokenization"]["max_target_length"],
@@ -482,6 +569,8 @@ def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Datase
             JsonlRecipeDataset(
                 dataset_path=cfg["data"]["eval_path"],
                 tokenizer=tokenizer,
+                cfg=cfg,
+                accelerator=accelerator,
                 task_prefix=cfg["model"]["task_prefix"],
                 max_input_length=cfg["tokenization"]["max_input_length"],
                 max_target_length=cfg["tokenization"]["max_target_length"],
@@ -493,7 +582,15 @@ def build_datasets(cfg: dict[str, Any], tokenizer: Any) -> tuple[Dataset, Datase
 def build_dataloaders(
     cfg: dict[str, Any], tokenizer: Any, accelerator: Accelerator
 ) -> tuple[DataLoader, DataLoader, Dataset, Dataset]:
-    train_dataset, val_dataset = build_datasets(cfg, tokenizer)
+    train_dataset, val_dataset = build_datasets(cfg, tokenizer, accelerator)
+    collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=None,
+        padding="longest",
+        pad_to_multiple_of=8 if accelerator.device.type == "cuda" else None,
+        label_pad_token_id=-100,
+        return_tensors="pt",
+    )
     available_cpu_count = os.cpu_count() or 1
     process_count = max(1, accelerator.num_processes)
     configured_num_workers = cfg["data"].get("num_workers", "auto")
@@ -524,12 +621,14 @@ def build_dataloaders(
         train_dataset,
         batch_size=cfg["training"]["per_device_train_batch_size"],
         shuffle=True,
+        collate_fn=collator,
         **common_loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=cfg["training"]["per_device_eval_batch_size"],
         shuffle=False,
+        collate_fn=collator,
         **common_loader_kwargs,
     )
     return train_loader, val_loader, train_dataset, val_dataset
@@ -547,6 +646,9 @@ def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "learning_rate": cfg["training"]["learning_rate"],
         "warmup_ratio": cfg["training"]["warmup_ratio"],
         "evaluation_every_n_epochs": cfg["evaluation"].get("every_n_epochs", 1),
+        "evaluation_full_generation_every_n_epochs": cfg["evaluation"].get(
+            "full_generation_every_n_epochs", cfg["evaluation"].get("every_n_epochs", 1)
+        ),
         "checkpoint_dir": cfg["checkpointing"]["checkpoint_dir"],
         "tracking_uri": cfg["mlflow"]["tracking_uri"],
     }

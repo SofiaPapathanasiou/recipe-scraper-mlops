@@ -398,6 +398,7 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         "tuning_experiment_name",
         f"{config['mlflow']['experiment_name']}-optuna",
     )
+    config["mlflow"].setdefault("fail_on_artifact_logging_error", False)
     config["mlflow"]["tracking_uri"] = resolve_mlflow_tracking_uri(config)
     file_optuna_cfg = config.get("optuna", {})
     if file_optuna_cfg is None:

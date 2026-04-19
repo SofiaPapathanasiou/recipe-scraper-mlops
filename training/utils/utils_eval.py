@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 from accelerate import Accelerator
-from evaluate import load as load_metric
+from rouge_score import rouge_scorer
 from torch.utils.data import DataLoader
 
 from .utils_logging import debug_log
@@ -73,6 +73,23 @@ def safe_metric_value(value: Any) -> float:
     return float(value)
 
 
+def compute_rouge_scores(predictions: list[str], references: list[str]) -> dict[str, float]:
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+    pair_count = 0
+
+    for prediction, reference in zip(predictions, references, strict=True):
+        scores = scorer.score(reference, prediction)
+        for metric_name in totals:
+            totals[metric_name] += float(scores[metric_name].fmeasure)
+        pair_count += 1
+
+    if pair_count == 0:
+        return totals
+
+    return {metric_name: value / pair_count for metric_name, value in totals.items()}
+
+
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
@@ -80,15 +97,29 @@ def evaluate(
     tokenizer: Any,
     accelerator: Accelerator,
     cfg: dict[str, Any],
+    *,
+    compute_generation: bool = True,
+    max_eval_batches: int | None = None,
+    generation_max_new_tokens: int | None = None,
 ) -> dict[str, float]:
-    # Validation computes both loss and decoded text metrics such as ROUGE.
+    # Validation can run in a cheap loss-only mode or a full decoded-metrics mode.
     model.eval()
     total_loss = 0.0
     num_batches = 0
-    rouge_metric = load_metric("rouge") if accelerator.is_main_process else None
-    debug_log(accelerator, f"Starting evaluation over {len(loader)} batches.")
+    all_predictions: list[str] = []
+    all_references: list[str] = []
+    if generation_max_new_tokens is None:
+        generation_max_new_tokens = int(cfg["tokenization"]["max_target_length"])
+    total_batches = len(loader) if max_eval_batches is None else min(len(loader), max_eval_batches)
+    debug_log(
+        accelerator,
+        f"Starting evaluation over {total_batches} batches "
+        f"(generation={'on' if compute_generation else 'off'}, max_new_tokens={generation_max_new_tokens}).",
+    )
 
     for batch_index, batch in enumerate(loader, start=1):
+        if max_eval_batches is not None and batch_index > max_eval_batches:
+            break
         num_batches += 1
         input_ids = batch["input_ids"].to(accelerator.device, non_blocking=True)
         attention_mask = batch["attention_mask"].to(accelerator.device, non_blocking=True)
@@ -104,51 +135,59 @@ def evaluate(
                 f"First eval batch summary: {summarize_batch(batch)}",
             )
 
-        generated = generate_safely(
-            model,
-            accelerator,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=cfg["tokenization"]["max_target_length"],
-        )
-
-        labels_for_decode = labels.clone()
-        labels_for_decode[labels_for_decode == -100] = tokenizer.pad_token_id
-
-        # Gather predictions across all processes before computing metrics on rank 0.
-        generated = accelerator.pad_across_processes(generated, dim=1, pad_index=tokenizer.pad_token_id)
-        labels_for_decode = accelerator.pad_across_processes(
-            labels_for_decode, dim=1, pad_index=tokenizer.pad_token_id
-        )
-        gathered_generated, gathered_labels = accelerator.gather_for_metrics((generated, labels_for_decode))
-
-        if accelerator.is_main_process and rouge_metric is not None:
-            rouge_metric.add_batch(
-                predictions=decode_batch(tokenizer, gathered_generated),
-                references=decode_batch(tokenizer, gathered_labels),
+        if compute_generation:
+            generated = generate_safely(
+                model,
+                accelerator,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=generation_max_new_tokens,
             )
 
-        if batch_index == len(loader) or batch_index % 10 == 0:
+            labels_for_decode = labels.clone()
+            labels_for_decode[labels_for_decode == -100] = tokenizer.pad_token_id
+
+            # Gather predictions across all processes before computing metrics on rank 0.
+            generated = accelerator.pad_across_processes(generated, dim=1, pad_index=tokenizer.pad_token_id)
+            labels_for_decode = accelerator.pad_across_processes(
+                labels_for_decode, dim=1, pad_index=tokenizer.pad_token_id
+            )
+            gathered_generated, gathered_labels = accelerator.gather_for_metrics((generated, labels_for_decode))
+
+            if accelerator.is_main_process:
+                all_predictions.extend(decode_batch(tokenizer, gathered_generated))
+                all_references.extend(decode_batch(tokenizer, gathered_labels))
+
+        if batch_index == total_batches or batch_index % 10 == 0:
             debug_log(
                 accelerator,
-                f"Evaluation progress: batch {batch_index}/{len(loader)} "
+                f"Evaluation progress: batch {batch_index}/{total_batches} "
                 f"(running avg loss: {total_loss / max(num_batches, 1):.4f})",
             )
 
-        del outputs, generated, labels_for_decode
+        del outputs
+        if compute_generation:
+            del generated, labels_for_decode
 
     avg_loss = total_loss / max(num_batches, 1)
-    if accelerator.is_main_process and rouge_metric is not None:
-        rouge_scores = rouge_metric.compute(use_stemmer=True)
-    else:
+    if compute_generation and accelerator.is_main_process:
+        rouge_scores = compute_rouge_scores(all_predictions, all_references)
+    elif compute_generation:
         rouge_scores = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+    else:
+        rouge_scores = None
 
-    metrics = {
+    metrics: dict[str, float] = {
         "eval_loss": avg_loss,
-        "eval_rouge1": safe_metric_value(rouge_scores["rouge1"]),
-        "eval_rouge2": safe_metric_value(rouge_scores["rouge2"]),
-        "eval_rougeL": safe_metric_value(rouge_scores["rougeL"]),
     }
+    if rouge_scores is not None:
+        metrics.update(
+            {
+                "eval_rouge1": safe_metric_value(rouge_scores["rouge1"]),
+                "eval_rouge2": safe_metric_value(rouge_scores["rouge2"]),
+                "eval_rougeL": safe_metric_value(rouge_scores["rougeL"]),
+            }
+        )
     debug_log(accelerator, f"Finished evaluation with metrics: {json.dumps(metrics, sort_keys=True)}")
     return metrics
 

@@ -172,6 +172,12 @@ Supported values are `no`, `fp16`, `bf16`, and `fp8`. The config value is now us
 the training worker directly, while `ACCELERATE_MIXED_PRECISION` can still override it
 when you need an environment-level override for a specific run.
 
+MLflow artifact uploads happen after the best checkpoint is already saved locally. If the
+artifact server resets the connection during a large upload, training now keeps the run
+successful by default and leaves the best checkpoint on disk. Set
+`mlflow.fail_on_artifact_logging_error: true` if you want those upload failures to fail
+the run instead.
+
 With `checkpointing.save_intermediate_checkpoints: false`, training now persists only the
 current best checkpoint locally under `<checkpoint_dir>/<run_id-or-manual-run>/best` so it
 survives container or pod crashes before the final MLflow artifact upload.
