@@ -33,10 +33,14 @@ mlflow:
   allowedHosts: "*"
   s3:
     endpointUrl: "https://chi.tacc.chameleoncloud.org:7480"
-    existingSecret: ""
+    existingSecret: "mlflow-s3-credentials"
     accessKeyId: ""
     secretAccessKey: ""
-    bucketName: ""
+    bucketName: "ObjStore_proj22"
+    region: ""
+    caBundle: ""
+    preflight:
+      enabled: true
   resources:
     requests:
       memory: "1Gi"
@@ -81,6 +85,12 @@ data:
 trainingJob:
   enabled: false
   backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: null
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}
   nodeSelector:
     kubernetes.io/hostname: gpu-node
   tolerations:
@@ -88,9 +98,19 @@ trainingJob:
       operator: Exists
       effect: NoSchedule
   image:
+    # `fullName` lets the chart use a fully-qualified image reference
+    # such as ghcr.io/org/recipe-scraper-training:sha-abc123.
+    fullName: ""
     repository: recipe-scraper-training
     tag: "latest"
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  mlflowPreflight:
+    enabled: true
+    checkArtifactStore: true
+    artifactCredentialsSecret: ""
+  modelCache:
+    prewarmEnabled: false
   storage:
     enabled: true
     # Legacy catch-all root for datasets and training outputs.
@@ -109,6 +129,8 @@ trainingJob:
     trainJsonlPath: ""
     evalJsonlPath: ""
     checkpointDir: /data/checkpoints/recipe-correction
+    # Keep the Hugging Face model cache on the mounted training volume so
+    # first-run downloads are reusable across later Jobs.
     hfCacheDir: /data/checkpoints/huggingface-cache
     numProcesses: "1"
     extraArgs: ""
