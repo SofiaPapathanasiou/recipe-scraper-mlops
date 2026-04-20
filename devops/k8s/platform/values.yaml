@@ -100,11 +100,7 @@ trainingJob:
   image:
     # `fullName` lets the chart use a fully-qualified image reference
     # such as ghcr.io/org/recipe-scraper-training:sha-abc123.
-<<<<<<< HEAD
     fullName: "192.168.1.11:5000/recipe-scraper-training:latest"
-=======
-    fullName: ""
->>>>>>> origin/main
     repository: recipe-scraper-training
     tag: "latest"
     pullPolicy: IfNotPresent

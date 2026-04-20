@@ -12,14 +12,10 @@ data:
       - job_name: 'triton'
         static_configs:
           - targets: ['recipe-triton-svc:8002']
-<<<<<<< HEAD
-=======
       - job_name: 'mealie-feedback'
         static_configs:
           - targets: ['mealie.recipe-scraper-mealie.svc.cluster.local:80']
         metrics_path: /api/ml/metrics
-
->>>>>>> origin/main
 ---
 apiVersion: apps/v1
 kind: Deployment

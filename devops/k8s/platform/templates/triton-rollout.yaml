@@ -34,23 +34,16 @@ spec:
 
               source /openrc/openrc
 
-<<<<<<< HEAD
               MODEL_CONTAINER="proj22-mlflow-artifacts"
               MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
-=======
-              MODEL_CONTAINER="ObjStore_proj22"
-              MODEL_PREFIX="1/199063f1ce644649908972d338dc1017/artifacts/checkpoints/best"
->>>>>>> origin/main
 
               rm -rf /models/recipe_model
               mkdir -p /models/recipe_model/1
 
-              # Copy model src from configmap
               cp /src/config.pbtxt /models/recipe_model/config.pbtxt
               cp /src/model.py /models/recipe_model/1/model.py
               cp /src/requirements.txt /models/recipe_model/1/requirements.txt
 
-              # Download weights from Swift
               cd /models/recipe_model/1
               swift download --ignore-checksum "$MODEL_CONTAINER" --prefix "${MODEL_PREFIX}/"
 
@@ -68,7 +61,6 @@ spec:
             - name: openrc
               mountPath: /openrc
               readOnly: true
-
       containers:
         - name: triton
           env:
@@ -114,7 +106,6 @@ spec:
           volumeMounts:
             - name: triton-models
               mountPath: /models
-
       volumes:
         - name: triton-models
           emptyDir: {}
@@ -124,7 +115,6 @@ spec:
         - name: openrc
           secret:
             secretName: {{ .Values.triton.openrc.existingSecret }}
-
   strategy:
     canary:
       steps:
@@ -133,22 +123,6 @@ spec:
             duration: 120s
         - analysis:
             templates:
-<<<<<<< HEAD
               - templateName: recipe-triton-analysis
-=======
-              - templateName: recipe-model-analysis
-            args:
-            - name: model-version
-              value: "{{ .Values.triton.image.tag }}"  
-        - setWeight: 50
-        - pause:
-            duration: 120s
-        - analysis:
-            templates:
-              - templateName: recipe-model-analysis
-            args:
-            - name: model-version
-              value: "{{ .Values.triton.image.tag }}"
->>>>>>> origin/main
         - setWeight: 100
 {{- end }}
