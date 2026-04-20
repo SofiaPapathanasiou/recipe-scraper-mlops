@@ -122,6 +122,8 @@ spec:
 
   strategy:
     canary:
+      maxSurge: {{ .Values.triton.rollout.maxSurge }}
+      maxUnavailable: {{ .Values.triton.rollout.maxUnavailable }}
       steps:
         - setWeight: 20
         - pause:
