@@ -23,26 +23,29 @@ spec:
           effect: NoSchedule
       initContainers:
         - name: init-models
-          image: "{{ .Values.data.jobs.image.repository }}:{{ .Values.data.jobs.image.tag }}"
-          imagePullPolicy: {{ .Values.data.jobs.image.pullPolicy }}
+          image: python:3.11
           command:
             - bash
             - -lc
             - |
               set -ex
 
+              pip install --no-cache-dir python-swiftclient python-keystoneclient
+
               source /openrc/openrc
 
-              MODEL_CONTAINER="proj22-mlflow-artifacts"
-              MODEL_PREFIX="1/3e05b71354a24ee398b7a69595863751/artifacts/checkpoints/best"
+              MODEL_CONTAINER="ObjStore_proj22"
+              MODEL_PREFIX="{{ .Values.triton.modelPrefix }}"
 
               rm -rf /models/recipe_model
               mkdir -p /models/recipe_model/1
 
+              # Copy model src from configmap
               cp /src/config.pbtxt /models/recipe_model/config.pbtxt
               cp /src/model.py /models/recipe_model/1/model.py
               cp /src/requirements.txt /models/recipe_model/1/requirements.txt
 
+              # Download weights from Swift
               cd /models/recipe_model/1
               swift download --ignore-checksum "$MODEL_CONTAINER" --prefix "${MODEL_PREFIX}/"
 
@@ -60,6 +63,7 @@ spec:
             - name: openrc
               mountPath: /openrc
               readOnly: true
+
       containers:
         - name: triton
           env:
@@ -105,6 +109,7 @@ spec:
           volumeMounts:
             - name: triton-models
               mountPath: /models
+
       volumes:
         - name: triton-models
           emptyDir: {}
@@ -114,16 +119,27 @@ spec:
         - name: openrc
           secret:
             secretName: {{ .Values.triton.openrc.existingSecret }}
+
   strategy:
     canary:
-      maxSurge: {{ .Values.triton.rollout.maxSurge }}
-      maxUnavailable: {{ .Values.triton.rollout.maxUnavailable }}
       steps:
         - setWeight: 20
         - pause:
             duration: 120s
         - analysis:
             templates:
-              - templateName: recipe-triton-analysis
+              - templateName: recipe-model-analysis
+            args:
+            - name: model-version
+              value: "{{ .Values.triton.image.tag }}"  
+        - setWeight: 50
+        - pause:
+            duration: 120s
+        - analysis:
+            templates:
+              - templateName: recipe-model-analysis
+            args:
+            - name: model-version
+              value: "{{ .Values.triton.image.tag }}"
         - setWeight: 100
 {{- end }}

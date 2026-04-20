@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mlflow-model-promoter
+  namespace: recipe-scraper-platform
+spec:
+  schedule: "*/30 * * * *"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  workflowSpec:
+    serviceAccountName: argo-workflow-executor
+    entrypoint: promote-best-model
+    volumes:
+    - name: workspace
+      emptyDir: {}
+    - name: git-credentials
+      secret:
+        secretName: git-credentials
+    templates:
+    - name: promote-best-model
+      initContainers:
+      - name: git-clone
+        image: alpine/git
+        command: [sh, -c]
+        args:
+        - |
+          git clone https://$(cat /git-credentials/token)@github.com/SofiaPapathanasiou/recipe-scraper-mlops.git /workspace
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: git-credentials
+          mountPath: /git-credentials
+      script:
+        image: python:3.11
+        command: [bash, -c]
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: git-credentials
+          mountPath: /git-credentials
+        source: |
+          pip install requests pyyaml gitpython -q
+          python3 /workspace/devops/workflows/promote.py
+        env:
+        - name: MLFLOW_URL
+          value: "http://mlflow.recipe-scraper-platform.svc.cluster.local:8000"
+        - name: GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: git-credentials
+              key: token
