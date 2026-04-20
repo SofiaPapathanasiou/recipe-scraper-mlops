@@ -1,0 +1,222 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: recipe-model-training
+  namespace: recipe-scraper-platform
+spec:
+  serviceAccountName: argo-workflow-executor
+  entrypoint: training-pipeline
+  podGC:
+    strategy: OnPodCompletion
+  ttlStrategy:
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 86400
+  volumes:
+    - name: training-data
+      persistentVolumeClaim:
+        claimName: "{{workflow.parameters.pvc-name}}"
+  arguments:
+    parameters:
+      - name: training-image
+        value: 192.168.1.11:5000/recipe-scraper-training:latest
+      - name: training-mode
+        value: train
+      - name: training-config
+        value: /app/config/config.yaml
+      - name: pvc-name
+        value: data-pvc
+      - name: data-dir
+        value: /data
+      - name: checkpoint-dir
+        value: /data/checkpoints/recipe-correction
+      - name: hf-cache-dir
+        value: /data/checkpoints/huggingface-cache
+      - name: num-processes
+        value: "1"
+      - name: train-jsonl-path
+        value: ""
+      - name: eval-jsonl-path
+        value: ""
+      - name: train-extra-args
+        value: ""
+      - name: mlflow-tracking-uri
+        value: http://mlflow:8000
+      - name: mlflow-artifact-secret
+        value: mlflow-s3-credentials
+      - name: check-artifact-store
+        value: "true"
+  templates:
+    - name: training-pipeline
+      steps:
+        - - name: mlflow-preflight
+            template: mlflow-preflight
+        - - name: train-model
+            template: train-model
+
+    - name: mlflow-preflight
+      inputs:
+        parameters:
+          - name: training-image
+            value: "{{workflow.parameters.training-image}}"
+          - name: mlflow-tracking-uri
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: mlflow-artifact-secret
+            value: "{{workflow.parameters.mlflow-artifact-secret}}"
+          - name: check-artifact-store
+            value: "{{workflow.parameters.check-artifact-store}}"
+      script:
+        image: "{{inputs.parameters.training-image}}"
+        imagePullPolicy: IfNotPresent
+        command:
+          - python
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{inputs.parameters.mlflow-tracking-uri}}"
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: https://chi.tacc.chameleoncloud.org:7480
+          - name: CHECK_ARTIFACT_STORE
+            value: "{{inputs.parameters.check-artifact-store}}"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: "{{inputs.parameters.mlflow-artifact-secret}}"
+                key: AWS_ACCESS_KEY_ID
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: "{{inputs.parameters.mlflow-artifact-secret}}"
+                key: AWS_SECRET_ACCESS_KEY
+          - name: BUCKET_NAME
+            valueFrom:
+              secretKeyRef:
+                name: "{{inputs.parameters.mlflow-artifact-secret}}"
+                key: BUCKET_NAME
+        source: |
+          import os
+          import socket
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+          artifact_endpoint = os.environ["MLFLOW_S3_ENDPOINT_URL"]
+          check_artifact_store = os.environ.get("CHECK_ARTIFACT_STORE", "true").lower() == "true"
+
+          def resolve_host(target: str) -> None:
+              parsed = urllib.parse.urlparse(target)
+              host = parsed.hostname or target
+              if not host:
+                  raise RuntimeError(f"Could not determine host for {target!r}")
+              socket.getaddrinfo(host, parsed.port)
+              print(f"Resolved {host}", flush=True)
+
+          def wait_for_http(target: str, attempts: int = 60, delay: int = 2) -> None:
+              last_error = None
+              for _ in range(attempts):
+                  try:
+                      with urllib.request.urlopen(target, timeout=5) as response:
+                          status = getattr(response, "status", 200)
+                          if status < 500:
+                              print(f"Reached {target} with HTTP {status}", flush=True)
+                              return
+                  except urllib.error.HTTPError as exc:
+                      if exc.code < 500:
+                          print(f"Reached {target} with HTTP {exc.code}", flush=True)
+                          return
+                      last_error = exc
+                  except Exception as exc:
+                      last_error = exc
+                  time.sleep(delay)
+              raise RuntimeError(f"Timed out reaching {target}: {last_error}")
+
+          resolve_host(tracking_uri)
+          wait_for_http(tracking_uri)
+
+          if check_artifact_store:
+              for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "BUCKET_NAME"):
+                  if not os.getenv(key):
+                      raise RuntimeError(f"Missing required artifact-store env var: {key}")
+              resolve_host(artifact_endpoint)
+              wait_for_http(artifact_endpoint)
+
+    - name: train-model
+      inputs:
+        parameters:
+          - name: training-image
+            value: "{{workflow.parameters.training-image}}"
+          - name: training-mode
+            value: "{{workflow.parameters.training-mode}}"
+          - name: training-config
+            value: "{{workflow.parameters.training-config}}"
+          - name: data-dir
+            value: "{{workflow.parameters.data-dir}}"
+          - name: checkpoint-dir
+            value: "{{workflow.parameters.checkpoint-dir}}"
+          - name: hf-cache-dir
+            value: "{{workflow.parameters.hf-cache-dir}}"
+          - name: num-processes
+            value: "{{workflow.parameters.num-processes}}"
+          - name: train-jsonl-path
+            value: "{{workflow.parameters.train-jsonl-path}}"
+          - name: eval-jsonl-path
+            value: "{{workflow.parameters.eval-jsonl-path}}"
+          - name: train-extra-args
+            value: "{{workflow.parameters.train-extra-args}}"
+          - name: mlflow-tracking-uri
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+      metadata:
+        annotations:
+          recipe-scraper-mlops/gpu-blocked-note: "This pod requests the only cluster GPU and will remain Pending while Triton is using gpu-node."
+      podSpecPatch: |
+        nodeSelector:
+          kubernetes.io/hostname: gpu-node
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      container:
+        image: "{{inputs.parameters.training-image}}"
+        imagePullPolicy: IfNotPresent
+        workingDir: /app
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{inputs.parameters.mlflow-tracking-uri}}"
+          - name: DATA_DIR
+            value: "{{inputs.parameters.data-dir}}"
+          - name: TRAIN_JSONL_PATH
+            value: "{{inputs.parameters.train-jsonl-path}}"
+          - name: EVAL_JSONL_PATH
+            value: "{{inputs.parameters.eval-jsonl-path}}"
+          - name: TRAIN_SCRIPT
+            value: /app/train.py
+          - name: TRAIN_CONFIG
+            value: "{{inputs.parameters.training-config}}"
+          - name: TRAIN_MODE
+            value: "{{inputs.parameters.training-mode}}"
+          - name: TRAINING_CHECKPOINT_DIR
+            value: "{{inputs.parameters.checkpoint-dir}}"
+          - name: TRAINING_HF_CACHE_DIR
+            value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: HF_CACHE_DIR
+            value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: NUM_PROCESSES
+            value: "{{inputs.parameters.num-processes}}"
+          - name: TRAIN_EXTRA_ARGS
+            value: "{{inputs.parameters.train-extra-args}}"
+        volumeMounts:
+          - name: training-data
+            mountPath: "{{inputs.parameters.data-dir}}"
+          - name: training-data
+            mountPath: "{{inputs.parameters.checkpoint-dir}}"
+          - name: training-data
+            mountPath: "{{inputs.parameters.hf-cache-dir}}"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "2"
+            memory: "6Gi"
+            nvidia.com/gpu: "1"

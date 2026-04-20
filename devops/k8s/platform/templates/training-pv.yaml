@@ -1,15 +1,208 @@
 {{- if .Values.trainingJob.enabled }}
+<<<<<<< HEAD
+{{- $trainingImage := .Values.trainingJob.image.fullName | default (printf "%s:%s" .Values.trainingJob.image.repository .Values.trainingJob.image.tag) }}
+{{- $mlflowArtifactSecret := .Values.trainingJob.mlflowPreflight.artifactCredentialsSecret | default (default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret) }}
+{{- $hasInitContainers := or .Values.trainingJob.modelCache.prewarmEnabled .Values.trainingJob.mlflowPreflight.enabled }}
+=======
+>>>>>>> origin/main
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: training-job
   namespace: {{ .Release.Namespace }}
+<<<<<<< HEAD
+{{- with .Values.trainingJob.labels }}
+  labels:
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- with .Values.trainingJob.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
 spec:
   backoffLimit: {{ .Values.trainingJob.backoffLimit }}
+{{- with .Values.trainingJob.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ . }}
+{{- end }}
+{{- with .Values.trainingJob.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ . }}
+{{- end }}
+=======
+spec:
+  backoffLimit: {{ .Values.trainingJob.backoffLimit }}
+>>>>>>> origin/main
   template:
     metadata:
       labels:
         app: training-job
+<<<<<<< HEAD
+{{- with .Values.trainingJob.podLabels }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.trainingJob.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+{{- with .Values.trainingJob.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.trainingJob.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.trainingJob.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      restartPolicy: Never
+{{- if $hasInitContainers }}
+      initContainers:
+{{- if .Values.trainingJob.modelCache.prewarmEnabled }}
+        - name: hf-cache-prewarm
+          image: {{ $trainingImage | quote }}
+          imagePullPolicy: {{ .Values.trainingJob.image.pullPolicy }}
+          workingDir: /app
+          env:
+            - name: PYTHONPATH
+              value: /app
+            - name: TRAIN_CONFIG
+              value: {{ .Values.trainingJob.env.trainConfig | quote }}
+            - name: TRAINING_CHECKPOINT_DIR
+              value: {{ .Values.trainingJob.env.checkpointDir | quote }}
+            - name: TRAINING_HF_CACHE_DIR
+              value: {{ .Values.trainingJob.env.hfCacheDir | quote }}
+            - name: HF_CACHE_DIR
+              value: {{ .Values.trainingJob.env.hfCacheDir | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              python - <<'PY'
+              import os
+              from utils import load_config, prepare_model_cache, resolve_hf_cache_dir, resolve_model_source
+
+              cfg = load_config(os.environ["TRAIN_CONFIG"])
+              model_source = resolve_model_source(cfg)
+              cache_dir = resolve_hf_cache_dir(cfg)
+              print(
+                  f"[hf-cache-prewarm] Preparing model source '{model_source}' in persistent cache {cache_dir}.",
+                  flush=True,
+              )
+              resolved_source = prepare_model_cache(cfg)
+              print(
+                  f"[hf-cache-prewarm] Model source ready at {resolved_source}.",
+                  flush=True,
+              )
+              PY
+{{- if .Values.trainingJob.storage.enabled }}
+{{- $mountPaths := list }}
+{{- with .Values.trainingJob.storage.mountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.datasetMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.checkpointMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.hfCacheMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+          volumeMounts:
+{{- range $mountPath := uniq $mountPaths }}
+            - name: training-data
+              mountPath: {{ $mountPath | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.trainingJob.mlflowPreflight.enabled }}
+        - name: mlflow-preflight
+          image: {{ $trainingImage | quote }}
+          imagePullPolicy: {{ .Values.trainingJob.image.pullPolicy }}
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+{{- if .Values.trainingJob.mlflowPreflight.checkArtifactStore }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ .Values.mlflow.s3.endpointUrl | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowArtifactSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowArtifactSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowArtifactSecret }}
+                  key: BUCKET_NAME
+{{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              python - <<'PY'
+              import os
+              import socket
+              import time
+              import urllib.error
+              import urllib.parse
+              import urllib.request
+
+              tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+              artifact_endpoint = os.getenv("MLFLOW_S3_ENDPOINT_URL", "").strip()
+              check_artifact_store = {{ ternary "True" "False" .Values.trainingJob.mlflowPreflight.checkArtifactStore }}
+
+              def resolve_host(target: str) -> None:
+                  parsed = urllib.parse.urlparse(target)
+                  host = parsed.hostname or target
+                  if not host:
+                      raise RuntimeError(f"Could not determine host for {target!r}")
+                  socket.getaddrinfo(host, parsed.port)
+                  print(f"Resolved {host}")
+
+              def wait_for_http(target: str, *, attempts: int = 60, delay: int = 2) -> None:
+                  last_error = None
+                  for _ in range(attempts):
+                      try:
+                          with urllib.request.urlopen(target, timeout=5) as response:
+                              status = getattr(response, "status", 200)
+                              if status < 500:
+                                  print(f"Reached {target} with HTTP {status}")
+                                  return
+                      except urllib.error.HTTPError as exc:
+                          if exc.code < 500:
+                              print(f"Reached {target} with HTTP {exc.code}")
+                              return
+                          last_error = exc
+                      except Exception as exc:
+                          last_error = exc
+                      time.sleep(delay)
+                  raise RuntimeError(f"Timed out reaching {target}: {last_error}")
+
+              resolve_host(tracking_uri)
+              wait_for_http(tracking_uri)
+
+              if check_artifact_store:
+                  for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "BUCKET_NAME"):
+                      if not os.getenv(key):
+                          raise RuntimeError(f"Missing required artifact-store env var: {key}")
+                  if artifact_endpoint:
+                      resolve_host(artifact_endpoint)
+                      wait_for_http(artifact_endpoint)
+              PY
+{{- end }}
+{{- end }}
+      containers:
+        - name: training
+          image: {{ $trainingImage | quote }}
+=======
     spec:
       restartPolicy: Never
       initContainers:
@@ -23,23 +216,81 @@ spec:
       containers:
         - name: training
           image: "{{ .Values.trainingJob.image.repository }}:{{ .Values.trainingJob.image.tag }}"
+>>>>>>> origin/main
           imagePullPolicy: {{ .Values.trainingJob.image.pullPolicy }}
           workingDir: /app
           env:
             - name: MLFLOW_TRACKING_URI
               value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+<<<<<<< HEAD
+            - name: DATA_DIR
+              value: {{ .Values.trainingJob.env.dataDir | quote }}
+{{- with .Values.trainingJob.env.trainJsonlPath }}
+            - name: TRAIN_JSONL_PATH
+              value: {{ . | quote }}
+{{- end }}
+{{- with .Values.trainingJob.env.evalJsonlPath }}
+            - name: EVAL_JSONL_PATH
+              value: {{ . | quote }}
+{{- end }}
+=======
+>>>>>>> origin/main
             - name: TRAIN_SCRIPT
               value: {{ .Values.trainingJob.env.trainScript | quote }}
             - name: TRAIN_CONFIG
               value: {{ .Values.trainingJob.env.trainConfig | quote }}
             - name: TRAIN_MODE
               value: {{ .Values.trainingJob.env.trainMode | quote }}
+<<<<<<< HEAD
+            - name: TRAINING_CHECKPOINT_DIR
+              value: {{ .Values.trainingJob.env.checkpointDir | quote }}
+            - name: TRAINING_HF_CACHE_DIR
+              value: {{ .Values.trainingJob.env.hfCacheDir | quote }}
+            - name: HF_CACHE_DIR
+              value: {{ .Values.trainingJob.env.hfCacheDir | quote }}
+=======
             - name: ACCELERATE_CONFIG_FILE
               value: {{ .Values.trainingJob.env.accelerateConfigFile | quote }}
+>>>>>>> origin/main
             - name: NUM_PROCESSES
               value: {{ .Values.trainingJob.env.numProcesses | quote }}
             - name: TRAIN_EXTRA_ARGS
               value: {{ .Values.trainingJob.env.extraArgs | quote }}
+<<<<<<< HEAD
+{{- if .Values.trainingJob.storage.enabled }}
+{{- $mountPaths := list }}
+{{- with .Values.trainingJob.storage.mountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.datasetMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.checkpointMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+{{- with .Values.trainingJob.storage.hfCacheMountPath }}
+{{- $mountPaths = append $mountPaths . }}
+{{- end }}
+          volumeMounts:
+{{- range $mountPath := uniq $mountPaths }}
+            - name: training-data
+              mountPath: {{ $mountPath | quote }}
+{{- end }}
+{{- end }}
           resources:
 {{ toYaml .Values.trainingJob.resources | indent 12 }}
+{{- if .Values.trainingJob.storage.enabled }}
+      volumes:
+        - name: training-data
+          {{- if .Values.data.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
+=======
+          resources:
+{{ toYaml .Values.trainingJob.resources | indent 12 }}
+>>>>>>> origin/main
 {{- end }}

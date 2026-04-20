@@ -1,0 +1,8 @@
+service:
+  nodePort: 30900
+
+env:
+  modelVersion: staging
+  extra:
+    - name: RECIPE_SCRAPER_ENV
+      value: staging

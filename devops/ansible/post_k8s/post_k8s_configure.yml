@@ -64,16 +64,49 @@
       ansible.builtin.debug:
         msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
 
+<<<<<<< HEAD
+- name: Install Argo Workflows CLI and prepare GitOps namespace
+  hosts: node1
+  become: yes
+  tasks:
+    - name: Install Argo Workflows CLI
+      ansible.builtin.get_url:
+        url: https://github.com/argoproj/argo-workflows/releases/download/v3.6.5/argo-linux-amd64.gz
+        dest: /tmp/argo-linux-amd64.gz
+        mode: "0644"
+
+    - name: Unpack Argo Workflows CLI
+      ansible.builtin.shell: |
+        gunzip -f /tmp/argo-linux-amd64.gz
+        install -m 0755 /tmp/argo-linux-amd64 /usr/local/bin/argo
+      args:
+        executable: /bin/bash
+
+    - name: Verify Argo Workflows CLI installation
+      ansible.builtin.command: argo version --client
+      register: argo_version
+      changed_when: false
+
+    - name: Show Argo Workflows CLI version
+      ansible.builtin.debug:
+        msg: "{{ argo_version.stdout_lines }}"
+
+    - name: Ensure argo-workflows namespace exists
+      ansible.builtin.command: kubectl create namespace argo-workflows
+=======
 - name: Bootstrap Argo Workflows
   hosts: node1
   become: yes
   tasks:
     - name: Ensure argo namespace exists
       ansible.builtin.command: kubectl create namespace argo
+>>>>>>> origin/main
       register: argo_namespace
       failed_when: argo_namespace.rc != 0 and "AlreadyExists" not in argo_namespace.stderr
       changed_when: "'created' in argo_namespace.stdout.lower()"
 
+<<<<<<< HEAD
+=======
     - name: Install Argo Workflows quick-start manifests
       ansible.builtin.command:
         argv:
@@ -84,6 +117,7 @@
           - -f
           - https://github.com/argoproj/argo-workflows/releases/download/v3.6.5/quick-start-minimal.yaml
 
+>>>>>>> origin/main
 - name: Bootstrap NVIDIA GPU support
   hosts: node1
   become: yes

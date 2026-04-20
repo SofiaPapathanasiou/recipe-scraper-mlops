@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recipe-scraper-platform
+  namespace: argocd
+spec:
+  project: recipe-scraper
+  source:
+    repoURL: https://github.com/SofiaPapathanasiou/recipe-scraper-mlops.git
+    targetRevision: HEAD
+    path: devops/k8s/platform
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: recipe-scraper-platform
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

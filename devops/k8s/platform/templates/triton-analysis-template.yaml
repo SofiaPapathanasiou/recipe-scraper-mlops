@@ -1,3 +1,23 @@
+<<<<<<< HEAD
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: recipe-triton-analysis
+  namespace: {{ .Release.Namespace }}
+spec:
+  metrics:
+    - name: failure-rate
+      interval: 1m
+      count: 3
+      successCondition: result[0] <= 0.05
+      failureCondition: result[0] > 0.05
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
+          query: |
+            sum(nv_inference_request_success)
+=======
 # apiVersion: argoproj.io/v1alpha1
 # kind: AnalysisTemplate
 # metadata:
@@ -79,3 +99,4 @@ spec:
           rate(nv_inference_request_duration_us[1h])
           /
           rate(nv_inference_request_success[1h])
+>>>>>>> origin/main

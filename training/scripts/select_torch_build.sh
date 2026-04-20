@@ -4,7 +4,26 @@ set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/workspace}"
 VENV_PATH="${VENV_PATH:-/opt/venv}"
 VENV_PYTHON="${VENV_PATH}/bin/python"
-TORCH_BUILD_MODE="${TORCH_BUILD_MODE:-auto}"
+if [[ -n "${TORCH_BUILD_MODE:-}" ]]; then
+    resolved_torch_build_mode="${TORCH_BUILD_MODE}"
+elif [[ -n "${TRAIN_CONFIG:-}" && -f "${TRAIN_CONFIG}" ]]; then
+    resolved_torch_build_mode="$(
+        python - "${TRAIN_CONFIG}" <<'PY'
+import sys
+
+import yaml
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    config = yaml.safe_load(handle) or {}
+
+print(config.get("runtime", {}).get("torch_build_mode", "auto"))
+PY
+    )"
+else
+    resolved_torch_build_mode="auto"
+fi
+
+TORCH_BUILD_MODE="${resolved_torch_build_mode}"
 
 gpu_visible=0
 if [[ -e /dev/nvidiactl || -e /dev/nvidia0 ]]; then

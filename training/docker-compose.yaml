@@ -1,9 +1,6 @@
 # Recipe correction training stack
 # Services: Jupyter, Training
 
-x-runtime-env: &runtime-env
-  MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://129.114.26.23:8000/}
-
 services:
   jupyter:
     build:
@@ -15,21 +12,31 @@ services:
     environment:
       JUPYTER_ENABLE_LAB: "yes"
       JUPYTER_LAB_EXTENSION_MANAGER: "none"
-      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
-      TORCH_BUILD_MODE: ${TORCH_BUILD_MODE:-auto}
       PROJECT_ROOT: /app
       PYTHONPATH: /app
       VENV_PATH: /opt/venv
       TRAIN_SCRIPT: /app/train.py
-      TRAIN_CONFIG: /app/config.yaml
-      ACCELERATE_CONFIG_FILE: /app/accelerate_config.yaml
-      NUM_PROCESSES: ${NUM_PROCESSES:-2}
-      <<: *runtime-env
+      TRAIN_CONFIG: /app/config/config.yaml
     working_dir: /app
     command:
       - bash
       - -lc
       - |
+        if [ -z "${JUPYTER_TOKEN:-}" ]; then
+          JUPYTER_TOKEN="$(
+            python - "${TRAIN_CONFIG:-/app/config/config.yaml}" <<'PY'
+import sys
+
+import yaml
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    config = yaml.safe_load(handle) or {}
+
+print(config.get("runtime", {}).get("jupyter_token", ""))
+PY
+          )"
+          export JUPYTER_TOKEN
+        fi
         bash /app/scripts/select_torch_build.sh && \
         exec /opt/venv/bin/jupyter lab \
           --ip=0.0.0.0 \
@@ -56,12 +63,11 @@ services:
     profiles:
       - training
     restart: "no"
-    environment:
-      NUM_PROCESSES: ${NUM_PROCESSES:-2}
-      <<: *runtime-env
     volumes:
       - .:/app
       - ../.git:/app/.git:ro
       - ./data:/app/data
       - ./checkpoints:/app/checkpoints
+    shm_size: "8gb"
+    # Production training is GPU-only by design.
     gpus: all

@@ -207,8 +207,6 @@ marimo/_lsp/
 __marimo__/
 training/checkpoints/
 devops/tf/kvm/clouds.yaml
-eval.jsonl
-train.jsonl
 devops/tf/kvm/.terraform/
 
 # Large data files - stored in object store not git
@@ -218,4 +216,6 @@ devops/tf/kvm/.terraform/
 data/processed/
 data/reports/drift/
 data/reports/*.json
+eval.jsonl
+train.jsonl
 mealie-src/

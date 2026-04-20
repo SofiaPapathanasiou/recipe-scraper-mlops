@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: recipe-scraper
+  namespace: argocd
+spec:
+  sourceRepos:
+    - https://github.com/SofiaPapathanasiou/recipe-scraper-mlops.git
+  destinations:
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+    - namespace: argo-workflows
+      server: https://kubernetes.default.svc
+    - namespace: recipe-scraper-platform
+      server: https://kubernetes.default.svc
+    - namespace: recipe-scraper-staging
+      server: https://kubernetes.default.svc
+    - namespace: recipe-scraper-canary
+      server: https://kubernetes.default.svc
+    - namespace: recipe-scraper-production
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'

@@ -34,6 +34,66 @@ spec:
         - /bin/sh
         - -c
         - until pg_isready -h postgres -p {{ .Values.postgres.service.port }} -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+<<<<<<< HEAD
+{{- if .Values.mlflow.s3.preflight.enabled }}
+      - name: verify-artifact-store
+        image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
+        imagePullPolicy: {{ .Values.mlflow.image.pullPolicy }}
+        env:
+        - name: MLFLOW_S3_ENDPOINT_URL
+          value: {{ .Values.mlflow.s3.endpointUrl | quote }}
+{{- with .Values.mlflow.s3.region }}
+        - name: AWS_DEFAULT_REGION
+          value: {{ . | quote }}
+        - name: AWS_REGION
+          value: {{ . | quote }}
+{{- end }}
+{{- with .Values.mlflow.s3.caBundle }}
+        - name: AWS_CA_BUNDLE
+          value: {{ . | quote }}
+{{- end }}
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
+              key: AWS_SECRET_ACCESS_KEY
+        - name: BUCKET_NAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ default "mlflow-s3-credentials" .Values.mlflow.s3.existingSecret }}
+              key: BUCKET_NAME
+        command:
+        - /bin/sh
+        - -c
+        - |
+          python -m pip install --no-cache-dir boto3 >/tmp/mlflow-s3-preflight-pip.log 2>&1 && \
+          python - <<'PY'
+          import os
+          import uuid
+
+          import boto3
+
+          bucket_name = os.environ["BUCKET_NAME"]
+          endpoint_url = os.environ.get("MLFLOW_S3_ENDPOINT_URL", "").strip() or None
+          region_name = os.environ.get("AWS_DEFAULT_REGION", "").strip() or None
+          object_key = f"mlflow-preflight/{uuid.uuid4().hex}"
+
+          client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name)
+          client.head_bucket(Bucket=bucket_name)
+          print(f"Verified bucket access for {bucket_name}")
+          client.put_object(Bucket=bucket_name, Key=object_key, Body=b"mlflow artifact preflight")
+          print(f"Uploaded preflight object {object_key}")
+          client.delete_object(Bucket=bucket_name, Key=object_key)
+          print(f"Deleted preflight object {object_key}")
+          PY
+{{- end }}
+=======
+>>>>>>> origin/main
       containers:
       - name: mlflow
         image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
@@ -67,6 +127,19 @@ spec:
           value: {{ .Values.mlflow.allowedHosts | quote }}
         - name: MLFLOW_S3_ENDPOINT_URL
           value: {{ .Values.mlflow.s3.endpointUrl | quote }}
+<<<<<<< HEAD
+{{- with .Values.mlflow.s3.region }}
+        - name: AWS_DEFAULT_REGION
+          value: {{ . | quote }}
+        - name: AWS_REGION
+          value: {{ . | quote }}
+{{- end }}
+{{- with .Values.mlflow.s3.caBundle }}
+        - name: AWS_CA_BUNDLE
+          value: {{ . | quote }}
+{{- end }}
+=======
+>>>>>>> origin/main
         - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:

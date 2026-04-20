@@ -1,0 +1,667 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import torch
+from accelerate import Accelerator
+from datasets import Dataset as HFDataset
+from datasets import load_dataset, load_from_disk
+from torch.utils.data import DataLoader, Dataset
+from transformers import DataCollatorForSeq2Seq
+
+from .utils_core import resolve_hf_cache_dir, resolve_model_source
+
+MOCK_RECIPE_BLUEPRINTS = [
+    {
+        "title": "Lemon Garlic Chicken Pasta",
+        "yield": "4 servings",
+        "prep_time": "15 minutes",
+        "cook_time": "25 minutes",
+        "ingredients": [
+            "8 ounces spaghetti",
+            "1 pound boneless chicken breast, diced",
+            "2 tablespoons olive oil",
+            "3 cloves garlic, minced",
+            "1 lemon, zested and juiced",
+            "1/2 cup grated parmesan",
+            "2 cups baby spinach",
+            "1/2 teaspoon kosher salt",
+            "1/4 teaspoon black pepper",
+        ],
+        "instructions": [
+            "Cook the spaghetti in salted water until al dente, then reserve 1/2 cup pasta water and drain.",
+            "Heat the olive oil in a skillet and cook the chicken until browned and cooked through.",
+            "Stir in the garlic, lemon zest, lemon juice, salt, and pepper, then cook for 1 minute.",
+            "Add the spinach and cooked pasta, tossing with the parmesan and reserved pasta water until glossy.",
+        ],
+        "notes": "Serve with extra parmesan and lemon wedges.",
+    },
+    {
+        "title": "One-Bowl Banana Muffins",
+        "yield": "12 muffins",
+        "prep_time": "10 minutes",
+        "cook_time": "20 minutes",
+        "ingredients": [
+            "3 ripe bananas, mashed",
+            "1/2 cup melted butter",
+            "1/2 cup brown sugar",
+            "1 egg",
+            "1 teaspoon vanilla extract",
+            "1 1/2 cups all-purpose flour",
+            "1 teaspoon baking soda",
+            "1/2 teaspoon cinnamon",
+            "1/4 teaspoon salt",
+        ],
+        "instructions": [
+            "Preheat the oven to 350F and line a 12-cup muffin tin.",
+            "Whisk the bananas, melted butter, brown sugar, egg, and vanilla until smooth.",
+            "Fold in the flour, baking soda, cinnamon, and salt just until no dry streaks remain.",
+            "Divide the batter between the cups and bake until the tops spring back lightly.",
+        ],
+        "notes": "A few chocolate chips or chopped walnuts can be folded in with the dry ingredients.",
+    },
+    {
+        "title": "Sheet Pan Sausage and Vegetables",
+        "yield": "4 servings",
+        "prep_time": "15 minutes",
+        "cook_time": "30 minutes",
+        "ingredients": [
+            "12 ounces smoked sausage, sliced",
+            "1 red bell pepper, chopped",
+            "1 zucchini, sliced",
+            "1 small red onion, cut into wedges",
+            "12 ounces baby potatoes, halved",
+            "2 tablespoons olive oil",
+            "1 teaspoon paprika",
+            "1/2 teaspoon garlic powder",
+            "1/2 teaspoon salt",
+        ],
+        "instructions": [
+            "Heat the oven to 425F and line a sheet pan with parchment.",
+            "Toss the sausage, bell pepper, zucchini, onion, and potatoes with the olive oil and seasonings.",
+            "Spread everything in an even layer and roast until the vegetables are tender and caramelized.",
+            "Stir halfway through cooking so the potatoes brown on multiple sides.",
+        ],
+        "notes": "Finish with chopped parsley or a squeeze of lemon if you have it.",
+    },
+    {
+        "title": "Tomato Basil Soup",
+        "yield": "6 servings",
+        "prep_time": "10 minutes",
+        "cook_time": "35 minutes",
+        "ingredients": [
+            "2 tablespoons butter",
+            "1 yellow onion, diced",
+            "3 cloves garlic, minced",
+            "2 tablespoons tomato paste",
+            "2 cans crushed tomatoes",
+            "2 cups vegetable broth",
+            "1/3 cup heavy cream",
+            "1/4 cup basil leaves",
+            "3/4 teaspoon salt",
+        ],
+        "instructions": [
+            "Melt the butter in a soup pot and cook the onion until softened.",
+            "Add the garlic and tomato paste, stirring until fragrant and slightly darkened.",
+            "Pour in the crushed tomatoes and broth, then simmer for 25 minutes.",
+            "Blend until smooth, then stir in the cream, basil, and salt before serving.",
+        ],
+        "notes": "A grilled cheese sandwich makes a good side.",
+    },
+    {
+        "title": "Honey Soy Salmon Bowls",
+        "yield": "4 servings",
+        "prep_time": "20 minutes",
+        "cook_time": "15 minutes",
+        "ingredients": [
+            "4 salmon fillets",
+            "3 tablespoons soy sauce",
+            "2 tablespoons honey",
+            "1 tablespoon rice vinegar",
+            "1 teaspoon grated ginger",
+            "2 cups cooked jasmine rice",
+            "1 cucumber, sliced",
+            "1 avocado, sliced",
+            "2 green onions, thinly sliced",
+        ],
+        "instructions": [
+            "Whisk the soy sauce, honey, rice vinegar, and ginger in a shallow dish.",
+            "Marinate the salmon for 10 minutes while the oven heats to 400F.",
+            "Bake the salmon until flaky, brushing with the leftover marinade halfway through.",
+            "Build bowls with rice, cucumber, avocado, and salmon, then top with green onions.",
+        ],
+        "notes": "Sesame seeds add crunch if you want a garnish.",
+    },
+    {
+        "title": "Creamy Chickpea Curry",
+        "yield": "4 servings",
+        "prep_time": "10 minutes",
+        "cook_time": "25 minutes",
+        "ingredients": [
+            "1 tablespoon coconut oil",
+            "1 onion, diced",
+            "2 cloves garlic, minced",
+            "1 tablespoon grated ginger",
+            "2 tablespoons curry powder",
+            "2 cans chickpeas, drained",
+            "1 can coconut milk",
+            "1 cup diced tomatoes",
+            "1/2 teaspoon salt",
+        ],
+        "instructions": [
+            "Warm the coconut oil in a skillet and cook the onion until translucent.",
+            "Add the garlic, ginger, and curry powder, stirring until fragrant.",
+            "Stir in the chickpeas, coconut milk, tomatoes, and salt.",
+            "Simmer until slightly thickened, then serve over rice or with naan.",
+        ],
+        "notes": "Baby spinach can be stirred in during the last 2 minutes of cooking.",
+    },
+    {
+        "title": "Classic Pancakes",
+        "yield": "10 pancakes",
+        "prep_time": "10 minutes",
+        "cook_time": "15 minutes",
+        "ingredients": [
+            "1 1/2 cups all-purpose flour",
+            "2 tablespoons sugar",
+            "2 teaspoons baking powder",
+            "1/4 teaspoon salt",
+            "1 1/4 cups milk",
+            "1 egg",
+            "2 tablespoons melted butter",
+            "1 teaspoon vanilla extract",
+        ],
+        "instructions": [
+            "Whisk the flour, sugar, baking powder, and salt in a bowl.",
+            "In a second bowl, whisk the milk, egg, melted butter, and vanilla.",
+            "Pour the wet mixture into the dry ingredients and stir just until combined.",
+            "Cook 1/4-cup portions on a greased skillet until bubbles form and the pancakes are golden on both sides.",
+        ],
+        "notes": "Do not overmix or the pancakes will be tough.",
+    },
+    {
+        "title": "Roasted Broccoli Mac and Cheese",
+        "yield": "6 servings",
+        "prep_time": "15 minutes",
+        "cook_time": "35 minutes",
+        "ingredients": [
+            "12 ounces elbow macaroni",
+            "1 head broccoli, cut into florets",
+            "2 tablespoons olive oil",
+            "3 tablespoons butter",
+            "3 tablespoons flour",
+            "2 cups milk",
+            "2 cups shredded cheddar cheese",
+            "1/2 teaspoon salt",
+            "1/4 teaspoon mustard powder",
+        ],
+        "instructions": [
+            "Roast the broccoli with the olive oil at 425F until crisp-tender.",
+            "Cook the macaroni until just shy of al dente and drain.",
+            "Make a roux with the butter and flour, whisk in the milk, then melt in the cheddar, salt, and mustard powder.",
+            "Fold in the macaroni and broccoli, then bake until bubbling if you want a casserole-style finish.",
+        ],
+        "notes": "For a stovetop version, skip the final bake and serve immediately.",
+    },
+]
+
+
+def format_mock_recipe(recipe: dict[str, Any]) -> str:
+    ingredient_lines = "\n".join(f"- {item}" for item in recipe["ingredients"])
+    instruction_lines = "\n".join(f"{index}. {step}" for index, step in enumerate(recipe["instructions"], start=1))
+    return (
+        f"Title: {recipe['title']}\n"
+        f"Yield: {recipe['yield']}\n"
+        f"Prep time: {recipe['prep_time']}\n"
+        f"Cook time: {recipe['cook_time']}\n"
+        "Ingredients:\n"
+        f"{ingredient_lines}\n"
+        "Instructions:\n"
+        f"{instruction_lines}\n"
+        f"Notes: {recipe['notes']}"
+    )
+
+
+def apply_word_level_recipe_noise(text: str) -> str:
+    replacements = {
+        "Title:": "Ttle:",
+        "Yield:": "Yeild:",
+        "Prep time:": "Prep tm:",
+        "Cook time:": "Cook tm:",
+        "Ingredients:": "Ingrednts:",
+        "Instructions:": "Instrctions:",
+        "Notes:": "Note:",
+        "ounces": "oz",
+        "tablespoons": "tbsp",
+        "teaspoons": "tsp",
+        "minutes": "mins",
+        "boneless": "bonless",
+        "chicken": "chikcen",
+        "parmesan": "parmasan",
+        "vegetable": "vegtable",
+        "broccoli": "brocoli",
+        "through": "thru",
+        "until": "till",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text.replace(", then", " then").replace(", and", " and")
+
+
+def collapse_recipe_sections(text: str) -> str:
+    collapsed = text.replace("\n- ", ", ").replace("\n", " | ")
+    collapsed = collapsed.replace("Instructions: | 1. ", "Directions: ")
+    collapsed = collapsed.replace(" | 2. ", " Next, ")
+    collapsed = collapsed.replace(" | 3. ", " Then ")
+    collapsed = collapsed.replace(" | 4. ", " Finally ")
+    collapsed = collapsed.replace(" | Notes: ", " | Note ")
+    return collapsed
+
+
+def remove_recipe_punctuation(text: str) -> str:
+    stripped = text.replace(":", "").replace(",", "").replace(".", "")
+    stripped = stripped.replace("1/2", "1-2").replace("1/4", "1-4")
+    stripped = stripped.replace("350F", "350 f").replace("425F", "425 f").replace("400F", "400 f")
+    return stripped
+
+
+def add_shorthand_recipe_noise(text: str) -> str:
+    replacements = {
+        "Preheat": "Pre-heat",
+        "Whisk": "Mix up",
+        "stir": "mix",
+        "until": "til",
+        "with the": "w/",
+        "and": "&",
+        "because": "bc",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text.replace("Instructions:", "Steps:").replace("Notes:", "Tips:")
+
+
+def build_mock_recipe_pairs() -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for recipe in MOCK_RECIPE_BLUEPRINTS:
+        target = format_mock_recipe(recipe)
+        pairs.extend(
+            [
+                (apply_word_level_recipe_noise(target), target),
+                (collapse_recipe_sections(apply_word_level_recipe_noise(target)), target),
+                (remove_recipe_punctuation(target), target),
+                (add_shorthand_recipe_noise(collapse_recipe_sections(target)), target),
+            ]
+        )
+    return pairs
+
+
+CORRUPTIONS = build_mock_recipe_pairs()
+
+
+def maybe_prepend_task_prefix(text: str, task_prefix: str) -> str:
+    if not task_prefix:
+        return text
+    if text.lstrip().startswith(task_prefix):
+        return text
+    return f"{task_prefix}{text}"
+
+
+def make_split(pairs: list[tuple[str, str]], target_size: int) -> list[tuple[str, str]]:
+    pool = pairs * (target_size // len(pairs) + 1)
+    generator = torch.Generator().manual_seed(0)
+    order = torch.randperm(len(pool), generator=generator).tolist()
+    shuffled = [pool[index] for index in order]
+    return shuffled[:target_size]
+
+
+class RecipeTextDataset(Dataset):
+    def __init__(
+        self,
+        pairs: list[tuple[str, str]],
+        tokenizer: Any,
+        task_prefix: str,
+        max_input_length: int,
+        max_target_length: int,
+    ) -> None:
+        self.tokenizer = tokenizer
+        self.inputs = [maybe_prepend_task_prefix(corrupted, task_prefix) for corrupted, _ in pairs]
+        self.targets = [target for _, target in pairs]
+        self.max_input_length = max_input_length
+        self.max_target_length = max_target_length
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        model_inputs = self.tokenizer(
+            self.inputs[index],
+            max_length=self.max_input_length,
+            truncation=True,
+        )
+        labels = self.tokenizer(
+            self.targets[index],
+            max_length=self.max_target_length,
+            truncation=True,
+        ).input_ids
+
+        return {
+            "input_ids": model_inputs["input_ids"],
+            "attention_mask": model_inputs["attention_mask"],
+            "labels": labels,
+        }
+
+
+class MockRecipeDataset(RecipeTextDataset):
+    def __init__(self, tokenizer: Any, cfg: dict[str, Any], split: str) -> None:
+        if split == "train":
+            size = cfg["data"]["mock_train_size"]
+        elif split == "val":
+            size = cfg["data"]["mock_val_size"]
+        else:
+            raise ValueError(f"Unsupported split {split!r}")
+
+        super().__init__(
+            pairs=make_split(CORRUPTIONS, size),
+            tokenizer=tokenizer,
+            task_prefix=cfg["model"]["task_prefix"],
+            max_input_length=cfg["tokenization"]["max_input_length"],
+            max_target_length=cfg["tokenization"]["max_target_length"],
+        )
+
+
+class JsonlRecipeDataset(Dataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        tokenizer: Any,
+        cfg: dict[str, Any],
+        accelerator: Accelerator,
+        task_prefix: str,
+        max_input_length: int,
+        max_target_length: int,
+    ) -> None:
+        self.dataset_path = Path(dataset_path).expanduser()
+        if not self.dataset_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {self.dataset_path}")
+        self.dataset = load_or_create_tokenized_jsonl_dataset(
+            dataset_path=self.dataset_path,
+            tokenizer=tokenizer,
+            cfg=cfg,
+            accelerator=accelerator,
+            task_prefix=task_prefix,
+            max_input_length=max_input_length,
+            max_target_length=max_target_length,
+        )
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        record = self.dataset[index]
+        return {
+            "input_ids": record["input_ids"],
+            "attention_mask": record["attention_mask"],
+            "labels": record["labels"],
+        }
+
+
+def resolve_tokenized_dataset_cache_root(cfg: dict[str, Any]) -> Path:
+    configured = cfg.get("data", {}).get("tokenized_cache_dir")
+    if configured:
+        return Path(str(configured)).expanduser()
+    return resolve_hf_cache_dir(cfg) / "tokenized-recipes"
+
+
+def build_tokenized_dataset_cache_key(
+    dataset_path: Path,
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> str:
+    dataset_stat = dataset_path.stat()
+    fingerprint = {
+        "dataset_path": str(dataset_path.resolve()),
+        "dataset_size": dataset_stat.st_size,
+        "dataset_mtime_ns": dataset_stat.st_mtime_ns,
+        "tokenizer_name_or_path": str(getattr(tokenizer, "name_or_path", tokenizer.__class__.__name__)),
+        "tokenizer_class": tokenizer.__class__.__name__,
+        "task_prefix": task_prefix,
+        "max_input_length": max_input_length,
+        "max_target_length": max_target_length,
+    }
+    return hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def tokenize_recipe_batch(
+    batch: dict[str, list[Any]],
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> dict[str, list[list[int]]]:
+    inputs = batch.get("input")
+    targets = batch.get("target")
+    if not isinstance(inputs, list) or not isinstance(targets, list):
+        raise ValueError("Expected batched JSONL records with list-valued 'input' and 'target' columns.")
+    if len(inputs) != len(targets):
+        raise ValueError("Expected matching numbers of 'input' and 'target' values in a tokenization batch.")
+
+    normalized_inputs: list[str] = []
+    normalized_targets: list[str] = []
+    for input_text, target_text in zip(inputs, targets, strict=True):
+        if not isinstance(input_text, str) or not isinstance(target_text, str):
+            raise ValueError("Expected string 'input' and 'target' values in the JSONL dataset.")
+        normalized_inputs.append(maybe_prepend_task_prefix(input_text, task_prefix))
+        normalized_targets.append(target_text)
+
+    model_inputs = tokenizer(
+        normalized_inputs,
+        max_length=max_input_length,
+        truncation=True,
+    )
+    labels = tokenizer(
+        normalized_targets,
+        max_length=max_target_length,
+        truncation=True,
+    )
+    return {
+        "input_ids": model_inputs["input_ids"],
+        "attention_mask": model_inputs["attention_mask"],
+        "labels": labels["input_ids"],
+    }
+
+
+def create_tokenized_jsonl_dataset(
+    dataset_path: Path,
+    cache_path: Path,
+    tokenizer: Any,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> None:
+    raw_dataset = load_dataset("json", data_files=str(dataset_path), split="train")
+    required_columns = {"input", "target"}
+    missing_columns = required_columns.difference(raw_dataset.column_names)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Expected JSONL dataset {dataset_path} to contain columns: {missing}.")
+
+    tokenized_dataset = raw_dataset.map(
+        lambda batch: tokenize_recipe_batch(
+            batch,
+            tokenizer=tokenizer,
+            task_prefix=task_prefix,
+            max_input_length=max_input_length,
+            max_target_length=max_target_length,
+        ),
+        batched=True,
+        remove_columns=raw_dataset.column_names,
+        desc=f"Tokenizing {dataset_path.name}",
+    )
+
+    if len(tokenized_dataset) == 0:
+        raise ValueError(f"Dataset file is empty: {dataset_path}")
+
+    temporary_cache_path = cache_path.with_name(f"{cache_path.name}.tmp-{os.getpid()}")
+    if temporary_cache_path.exists():
+        import shutil
+
+        shutil.rmtree(temporary_cache_path)
+    tokenized_dataset.save_to_disk(str(temporary_cache_path))
+    os.replace(temporary_cache_path, cache_path)
+
+
+def load_or_create_tokenized_jsonl_dataset(
+    dataset_path: Path,
+    tokenizer: Any,
+    cfg: dict[str, Any],
+    accelerator: Accelerator,
+    task_prefix: str,
+    max_input_length: int,
+    max_target_length: int,
+) -> HFDataset:
+    cache_root = resolve_tokenized_dataset_cache_root(cfg)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_key = build_tokenized_dataset_cache_key(
+        dataset_path=dataset_path,
+        tokenizer=tokenizer,
+        task_prefix=task_prefix,
+        max_input_length=max_input_length,
+        max_target_length=max_target_length,
+    )
+    cache_path = cache_root / f"{dataset_path.stem}-{cache_key}"
+
+    with accelerator.main_process_first():
+        if not cache_path.exists():
+            accelerator.print(f"Building tokenized dataset cache for {dataset_path} at {cache_path}.")
+            create_tokenized_jsonl_dataset(
+                dataset_path=dataset_path,
+                cache_path=cache_path,
+                tokenizer=tokenizer,
+                task_prefix=task_prefix,
+                max_input_length=max_input_length,
+                max_target_length=max_target_length,
+            )
+        else:
+            accelerator.print(f"Reusing tokenized dataset cache for {dataset_path} from {cache_path}.")
+
+    return load_from_disk(str(cache_path))
+
+
+def build_datasets(cfg: dict[str, Any], tokenizer: Any, accelerator: Accelerator) -> tuple[Dataset, Dataset]:
+    data_source = cfg["data"]["source"]
+    if data_source == "mock":
+        return MockRecipeDataset(tokenizer, cfg, "train"), MockRecipeDataset(tokenizer, cfg, "val")
+    if data_source == "jsonl":
+        return (
+            JsonlRecipeDataset(
+                dataset_path=cfg["data"]["train_path"],
+                tokenizer=tokenizer,
+                cfg=cfg,
+                accelerator=accelerator,
+                task_prefix=cfg["model"]["task_prefix"],
+                max_input_length=cfg["tokenization"]["max_input_length"],
+                max_target_length=cfg["tokenization"]["max_target_length"],
+            ),
+            JsonlRecipeDataset(
+                dataset_path=cfg["data"]["eval_path"],
+                tokenizer=tokenizer,
+                cfg=cfg,
+                accelerator=accelerator,
+                task_prefix=cfg["model"]["task_prefix"],
+                max_input_length=cfg["tokenization"]["max_input_length"],
+                max_target_length=cfg["tokenization"]["max_target_length"],
+            ),
+        )
+    raise ValueError(f"Unsupported data.source {data_source!r}; expected one of ('mock', 'jsonl').")
+
+
+def build_dataloaders(
+    cfg: dict[str, Any], tokenizer: Any, accelerator: Accelerator
+) -> tuple[DataLoader, DataLoader, Dataset, Dataset]:
+    train_dataset, val_dataset = build_datasets(cfg, tokenizer, accelerator)
+    collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=None,
+        padding="longest",
+        pad_to_multiple_of=8 if accelerator.device.type == "cuda" else None,
+        label_pad_token_id=-100,
+        return_tensors="pt",
+    )
+    available_cpu_count = os.cpu_count() or 1
+    process_count = max(1, accelerator.num_processes)
+    configured_num_workers = cfg["data"].get("num_workers", "auto")
+    if configured_num_workers is None:
+        configured_num_workers = "auto"
+
+    if str(configured_num_workers).strip().lower() in {"", "auto"}:
+        # Keep worker fan-out bounded per process so multi-GPU launches do not
+        # oversubscribe the host CPU.
+        per_process_cpu_budget = max(1, available_cpu_count // process_count)
+        num_workers = max(1, min(4, per_process_cpu_budget - 1))
+    else:
+        num_workers = max(0, int(configured_num_workers))
+
+    pin_memory = accelerator.device.type == "cuda"
+    persistent_workers = num_workers > 0
+    prefetch_factor = cfg["data"].get("prefetch_factor", 2) if persistent_workers else None
+
+    common_loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers,
+    }
+    if prefetch_factor is not None:
+        common_loader_kwargs["prefetch_factor"] = int(prefetch_factor)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=cfg["training"]["per_device_train_batch_size"],
+        shuffle=True,
+        collate_fn=collator,
+        **common_loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=cfg["training"]["per_device_eval_batch_size"],
+        shuffle=False,
+        collate_fn=collator,
+        **common_loader_kwargs,
+    )
+    return train_loader, val_loader, train_dataset, val_dataset
+
+
+def summarize_training_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    summary = {
+        "model_name": cfg["model"]["name"],
+        "model_source": resolve_model_source(cfg),
+        "data_source": cfg["data"]["source"],
+        "num_epochs": cfg["training"]["num_epochs"],
+        "train_batch_size": cfg["training"]["per_device_train_batch_size"],
+        "eval_batch_size": cfg["training"]["per_device_eval_batch_size"],
+        "gradient_accumulation_steps": cfg["training"]["gradient_accumulation_steps"],
+        "learning_rate": cfg["training"]["learning_rate"],
+        "warmup_ratio": cfg["training"]["warmup_ratio"],
+        "evaluation_every_n_epochs": cfg["evaluation"].get("every_n_epochs", 1),
+        "evaluation_full_generation_every_n_epochs": cfg["evaluation"].get(
+            "full_generation_every_n_epochs", cfg["evaluation"].get("every_n_epochs", 1)
+        ),
+        "checkpoint_dir": cfg["checkpointing"]["checkpoint_dir"],
+        "tracking_uri": cfg["mlflow"]["tracking_uri"],
+    }
+    if cfg["data"]["source"] == "jsonl":
+        summary["train_path"] = cfg["data"]["train_path"]
+        summary["eval_path"] = cfg["data"]["eval_path"]
+    summary["dataloader_num_workers"] = cfg["data"].get("num_workers", "auto")
+    return summary
+
+
+def summarize_batch(batch: dict[str, torch.Tensor]) -> str:
+    parts: list[str] = []
+    for key, value in batch.items():
+        shape = tuple(value.shape)
+        parts.append(f"{key}=shape{shape},dtype={value.dtype}")
+    return "; ".join(parts)

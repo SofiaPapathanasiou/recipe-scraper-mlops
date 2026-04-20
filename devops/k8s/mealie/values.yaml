@@ -1,7 +1,43 @@
+<<<<<<< HEAD
+namespace:
+  create: true
+
+replicaCount: 1
+
+image:
+  repository: graceritamcgrath/mealie-custom
+  tag: "v1.2"
+  pullPolicy: IfNotPresent
+
+service:
+  type: NodePort
+  port: 80
+  targetPort: 9000
+  nodePort: 30900
+
+persistence:
+  enabled: true
+  size: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+
+env:
+  puid: "1000"
+  pgid: "1000"
+  timezone: America/New_York
+  tritonServerUrl: http://recipe-triton-svc.recipe-scraper-platform.svc.cluster.local:8000
+  tritonModelName: recipe_model
+  apiDocs: "true"
+  modelVersion: v1.2
+  extra: []
+
+=======
 replicaCount: 1
 service:
   port: 80
   externalIP: ""
+>>>>>>> origin/main
 resources:
   limits:
     cpu: "1000m"
@@ -9,6 +45,9 @@ resources:
   requests:
     cpu: "500m"
     memory: "512Mi"
+<<<<<<< HEAD
+=======
 triton:
   serviceURL: "http://recipe-triton-svc.recipe-scraper-platform.svc.cluster.local:8000"
   modelName: "recipe_model"
+>>>>>>> origin/main
