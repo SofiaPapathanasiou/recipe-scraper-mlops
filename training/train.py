@@ -34,6 +34,7 @@ from utils import (
     debug_log,
     emit_console_summary,
     ensure_mlflow_experiment,
+    evaluate_model_registry_gate,
     ensure_supported_tune_runtime,
     evaluate,
     get_mlflow_experiment_name,
@@ -306,11 +307,11 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             )
             if should_run_full_generation:
                 max_eval_batches = config_dict["evaluation"].get("full_max_eval_batches")
-                generation_max_new_tokens = int(
-                    config_dict["evaluation"].get(
-                        "generation_max_new_tokens",
-                        config_dict["tokenization"]["max_target_length"],
-                    )
+                configured_generation_max_new_tokens = config_dict["evaluation"].get("generation_max_new_tokens")
+                generation_max_new_tokens = (
+                    None
+                    if configured_generation_max_new_tokens is None
+                    else int(configured_generation_max_new_tokens)
                 )
             else:
                 max_eval_batches = config_dict["evaluation"].get("interim_max_eval_batches")
@@ -467,6 +468,11 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
             artifact_warnings: list[str] = []
             logged_checkpoint_info = None
             mlflow_registry_info = None
+            registry_gate = evaluate_model_registry_gate(
+                config_dict,
+                objective_metric_name,
+                best_metric_to_log(best_metric, objective_direction),
+            )
 
             try:
                 logged_checkpoint_info = log_best_checkpoint_artifacts(best_checkpoint)
@@ -488,28 +494,53 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                 if fail_on_artifact_logging_error:
                     raise
 
-            try:
-                mlflow_registry_info = maybe_log_best_model_to_mlflow_registry(
-                    config_dict,
-                    best_checkpoint,
-                )
-                if mlflow_registry_info is not None:
-                    mlflow.set_tag("artifact_upload.model_registry.status", "ok")
-            except Exception as error:
-                warning_message = (
-                    "MLflow model registry upload failed; "
-                    f"keeping local checkpoint at {best_checkpoint}. Error: {error}"
-                )
-                artifact_warnings.append(warning_message)
-                mlflow.set_tag("artifact_upload.model_registry.status", "failed")
-                mlflow.set_tag("artifact_upload.model_registry.error", str(error)[:5000])
+            mlflow.log_metric("model_registry_gate_passed", 1.0 if registry_gate["passed"] else 0.0, step=global_step)
+            mlflow.set_tag("model_registry_gate.enabled", str(registry_gate["enabled"]).lower())
+            mlflow.set_tag("model_registry_gate.passed", str(registry_gate["passed"]).lower())
+            mlflow.set_tag("model_registry_gate.metric_name", str(registry_gate["metric_name"]))
+            mlflow.set_tag("model_registry_gate.metric_value", str(registry_gate["metric_value"]))
+            mlflow.set_tag("model_registry_gate.direction", str(registry_gate["direction"]))
+            mlflow.set_tag("model_registry_gate.reason", str(registry_gate["reason"]))
+            if registry_gate["threshold"] is not None:
+                mlflow.set_tag("model_registry_gate.threshold", str(registry_gate["threshold"]))
+            if registry_gate.get("comparator") is not None:
+                mlflow.set_tag("model_registry_gate.comparator", str(registry_gate["comparator"]))
+
+            if registry_gate["passed"]:
+                try:
+                    mlflow_registry_info = maybe_log_best_model_to_mlflow_registry(
+                        config_dict,
+                        best_checkpoint,
+                    )
+                    if mlflow_registry_info is not None:
+                        mlflow.set_tag("artifact_upload.model_registry.status", "ok")
+                except Exception as error:
+                    warning_message = (
+                        "MLflow model registry upload failed; "
+                        f"keeping local checkpoint at {best_checkpoint}. Error: {error}"
+                    )
+                    artifact_warnings.append(warning_message)
+                    mlflow.set_tag("artifact_upload.model_registry.status", "failed")
+                    mlflow.set_tag("artifact_upload.model_registry.error", str(error)[:5000])
+                    debug_log(
+                        accelerator,
+                        warning_message,
+                        section="MLFLOW REGISTRY WARNING",
+                    )
+                    if fail_on_artifact_logging_error:
+                        raise
+            else:
+                mlflow.set_tag("artifact_upload.model_registry.status", "skipped")
                 debug_log(
                     accelerator,
-                    warning_message,
-                    section="MLFLOW REGISTRY WARNING",
+                    (
+                        "Skipping MLflow model registry upload because the gating threshold was not met: "
+                        f"{registry_gate['metric_name']}={registry_gate['metric_value']:.4f}, "
+                        f"threshold={registry_gate['threshold']:.4f}, "
+                        f"direction={registry_gate['direction']}"
+                    ),
+                    section="MODEL REGISTRY GATE",
                 )
-                if fail_on_artifact_logging_error:
-                    raise
 
             if logged_checkpoint_info is not None:
                 log_json_artifact(
@@ -524,6 +555,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         "mlflow_best_model_uri": (
                             mlflow_registry_info["model_uri"] if mlflow_registry_info is not None else None
                         ),
+                        "model_registry_gate": registry_gate,
                     },
                     "best_model_pointer.json",
                     artifact_path="model_registry",
@@ -563,6 +595,7 @@ def train_worker(config_dict: dict[str, Any], context: TrainingContext | None = 
                         if logged_checkpoint_info is not None and mlflow_registry_info is not None
                         else "local-checkpoint-only"
                     ),
+                    "registry_gate_passed": registry_gate["passed"],
                     "mlflow_registered_model_name": (
                         mlflow_registry_info["registered_model_name"] if mlflow_registry_info is not None else "none"
                     ),

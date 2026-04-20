@@ -5,6 +5,7 @@ from typing import Any
 import torch
 from accelerate import Accelerator
 from rouge_score import rouge_scorer
+from sacrebleu.metrics import CHRF
 from torch.utils.data import DataLoader
 
 from .utils_logging import debug_log
@@ -90,6 +91,14 @@ def compute_rouge_scores(predictions: list[str], references: list[str]) -> dict[
     return {metric_name: value / pair_count for metric_name, value in totals.items()}
 
 
+def compute_chrf_score(predictions: list[str], references: list[str]) -> float:
+    if not predictions:
+        return 0.0
+
+    scorer = CHRF()
+    return float(scorer.corpus_score(predictions, [references]).score) / 100.0
+
+
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
@@ -172,10 +181,13 @@ def evaluate(
     avg_loss = total_loss / max(num_batches, 1)
     if compute_generation and accelerator.is_main_process:
         rouge_scores = compute_rouge_scores(all_predictions, all_references)
+        chrf_score = compute_chrf_score(all_predictions, all_references)
     elif compute_generation:
         rouge_scores = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+        chrf_score = 0.0
     else:
         rouge_scores = None
+        chrf_score = None
 
     metrics: dict[str, float] = {
         "eval_loss": avg_loss,
@@ -186,6 +198,7 @@ def evaluate(
                 "eval_rouge1": safe_metric_value(rouge_scores["rouge1"]),
                 "eval_rouge2": safe_metric_value(rouge_scores["rouge2"]),
                 "eval_rougeL": safe_metric_value(rouge_scores["rougeL"]),
+                "eval_chrf": safe_metric_value(chrf_score),
             }
         )
     debug_log(accelerator, f"Finished evaluation with metrics: {json.dumps(metrics, sort_keys=True)}")

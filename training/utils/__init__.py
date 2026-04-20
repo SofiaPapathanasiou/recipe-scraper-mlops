@@ -43,6 +43,7 @@ from .utils_eval import evaluate, get_optimizer_param_groups, get_peak_gpu_metri
 from .utils_logging import debug_log, emit_console_summary
 from .utils_mlflow import (
     build_mlflow_run_tags,
+    evaluate_model_registry_gate,
     ensure_mlflow_experiment,
     log_best_checkpoint_artifacts,
     log_json_artifact,

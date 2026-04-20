@@ -415,6 +415,9 @@ def load_config(yaml_path: str) -> dict[str, Any]:
         config.get("mlflow", {}).get("registered_model_name") or config["model"]["name"],
     )
     model_registry_cfg.setdefault("log_to_mlflow_model_registry", True)
+    model_registry_cfg.setdefault("registry_threshold", None)
+    model_registry_cfg.setdefault("registry_threshold_metric", None)
+    model_registry_cfg.setdefault("registry_threshold_direction", None)
     accelerate_cfg = config.get("accelerate")
     if accelerate_cfg is not None and not isinstance(accelerate_cfg, dict):
         raise ValueError("accelerate must be a mapping when defined in the training config.")

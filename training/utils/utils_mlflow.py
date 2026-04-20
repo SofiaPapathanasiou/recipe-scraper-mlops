@@ -36,6 +36,7 @@ from .utils_core import (
     ensure_hf_cache_env,
     flatten_dict,
     get_mlflow_experiment_name,
+    infer_metric_direction,
     resolve_mlflow_tracking_uri,
     sanitize_study_name,
     write_yaml_file,
@@ -562,3 +563,60 @@ def maybe_log_best_model_to_mlflow_registry(
         "registered_model_name": registered_model_name,
         "model_uri": f"models:/{registered_model_name}/{model_version.version}",
     }
+
+
+def evaluate_model_registry_gate(
+    cfg: dict[str, Any],
+    best_metric_name: str,
+    best_metric_value: float,
+) -> dict[str, Any]:
+    model_registry_cfg = cfg.get("model_registry", {})
+    gate_metric_name = str(
+        model_registry_cfg.get("registry_threshold_metric") or best_metric_name
+    )
+    if gate_metric_name != best_metric_name:
+        raise ValueError(
+            "model_registry.registry_threshold_metric must match the tracked best metric "
+            f"({best_metric_name}) for registry gating."
+        )
+    threshold = model_registry_cfg.get("registry_threshold")
+
+    decision: dict[str, Any] = {
+        "enabled": threshold is not None,
+        "passed": True,
+        "metric_name": gate_metric_name,
+        "metric_value": best_metric_value,
+        "threshold": threshold,
+        "direction": infer_metric_direction(gate_metric_name),
+        "reason": "threshold_not_configured",
+    }
+
+    if threshold is None:
+        return decision
+
+    threshold_value = float(threshold)
+    direction = str(
+        model_registry_cfg.get("registry_threshold_direction") or infer_metric_direction(gate_metric_name)
+    ).strip().lower()
+    if direction not in {"maximize", "minimize"}:
+        raise ValueError(
+            "model_registry.registry_threshold_direction must be 'maximize' or 'minimize' when provided."
+        )
+
+    if direction == "minimize":
+        passed = best_metric_value <= threshold_value
+        comparator = "less_than_or_equal"
+    else:
+        passed = best_metric_value >= threshold_value
+        comparator = "greater_than_or_equal"
+
+    decision.update(
+        {
+            "passed": passed,
+            "threshold": threshold_value,
+            "direction": direction,
+            "comparator": comparator,
+            "reason": "passed" if passed else "threshold_not_met",
+        }
+    )
+    return decision

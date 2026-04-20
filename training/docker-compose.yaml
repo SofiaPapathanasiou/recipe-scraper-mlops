@@ -68,5 +68,6 @@ PY
       - ../.git:/app/.git:ro
       - ./data:/app/data
       - ./checkpoints:/app/checkpoints
+    shm_size: "8gb"
     # Production training is GPU-only by design.
     gpus: all

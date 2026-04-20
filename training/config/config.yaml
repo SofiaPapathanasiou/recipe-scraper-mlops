@@ -10,7 +10,7 @@ training:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   num_epochs: 5
-  per_device_train_batch_size: 32
+  per_device_train_batch_size: 96
   per_device_eval_batch_size: 128
   gradient_accumulation_steps: 1
   warmup_ratio: 0.10
@@ -35,7 +35,7 @@ evaluation:
   full_generation_every_n_epochs: 3
   interim_max_eval_batches: 8
   full_max_eval_batches:
-  generation_max_new_tokens: 256
+  generation_max_new_tokens:
   run_on_last_epoch: true
   eval_steps: 500
   metric_for_best_model: eval_rougeL
@@ -63,6 +63,14 @@ mlflow:
 model_registry:
   log_to_mlflow_model_registry: true
   model_name: recipe-correction-t5
+  # Keep the run in MLflow either way, but only promote to the registry when
+  # the chosen metric clears this threshold. Leave null to disable gating.
+  registry_threshold: 0.40
+  # Defaults to evaluation.metric_for_best_model when omitted.
+  registry_threshold_metric: eval_rougeL
+  # Optional explicit override when inference from the metric name is wrong.
+  # Supported values: maximize, minimize.
+  registry_threshold_direction:
 
 data:
   source: jsonl
@@ -70,7 +78,7 @@ data:
   eval_file: eval.jsonl
   data_dir:
   # Keep evaluation fed on larger GPUs like H100 while staying reasonable on shared hosts.
-  num_workers: 8
-  prefetch_factor: 4
+  num_workers: 4
+  prefetch_factor: 2
   mock_train_size: 200
   mock_val_size: 40
