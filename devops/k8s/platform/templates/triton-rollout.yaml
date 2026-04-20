@@ -23,14 +23,13 @@ spec:
           effect: NoSchedule
       initContainers:
         - name: init-models
-          image: python:3.11
+          image: "{{ .Values.data.jobs.image.repository }}:{{ .Values.data.jobs.image.tag }}"
+          imagePullPolicy: {{ .Values.data.jobs.image.pullPolicy }}
           command:
             - bash
             - -lc
             - |
               set -ex
-
-              pip install --no-cache-dir python-swiftclient python-keystoneclient
 
               source /openrc/openrc
 
