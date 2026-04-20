@@ -13,9 +13,17 @@ data:
         static_configs:
           - targets: ['recipe-triton-svc:8002']
       - job_name: 'mealie-feedback'
-        static_configs:
-          - targets: ['mealie.recipe-scraper-mealie.svc.cluster.local:80']
         metrics_path: /api/ml/metrics
+        static_configs:
+          - targets: ['mealie.recipe-scraper-production.svc.cluster.local:80']
+            labels:
+              env: production
+          - targets: ['mealie.recipe-scraper-canary.svc.cluster.local:80']
+            labels:
+              env: canary
+          - targets: ['mealie.recipe-scraper-staging.svc.cluster.local:80']
+            labels:
+              env: staging
 ---
 apiVersion: apps/v1
 kind: Deployment
