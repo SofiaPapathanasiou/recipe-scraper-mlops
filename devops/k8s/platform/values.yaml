@@ -146,6 +146,12 @@ trainingJob:
 
 triton:
   enabled: true
+  rollout:
+    # This cluster currently has a single schedulable GPU node for Triton.
+    # Keep surge at zero so updates replace the old pod instead of trying
+    # to run stable and canary revisions concurrently.
+    maxSurge: 0
+    maxUnavailable: 1
   image:
     repository: graceritamcgrath/triton-custom
     tag: "24.10-py3"
