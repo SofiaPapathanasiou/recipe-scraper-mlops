@@ -62,7 +62,7 @@ data:
       pullPolicy: IfNotPresent
     mountPath: /data
   trainingQuality:
-    enabled: true
+    enabled: false
     schedule: "0 0 * * 1,4"
     resources:
       requests:
@@ -72,7 +72,7 @@ data:
         memory: "512Mi"
         cpu: "500m"
   driftMonitor:
-    enabled: true
+    enabled: false
     schedule: "0 * * * *"
     resources:
       requests:
