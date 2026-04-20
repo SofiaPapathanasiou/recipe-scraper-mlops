@@ -128,7 +128,7 @@ spec:
             duration: 120s
         - analysis:
             templates:
-              - templateName: recipe-model-analysis
+              - templateName: recipe-triton-analysis
             args:
             - name: model-version
               value: "{{ .Values.triton.image.tag }}"  
@@ -137,7 +137,7 @@ spec:
             duration: 120s
         - analysis:
             templates:
-              - templateName: recipe-model-analysis
+              - templateName: recipe-triton-analysis
             args:
             - name: model-version
               value: "{{ .Values.triton.image.tag }}"
