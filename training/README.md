@@ -51,6 +51,15 @@ docker compose --profile training build training
 Build and publish the training image to the cluster-local registry:
 
 ```bash
+# required once per build host because the registry serves plain HTTP
+sudo mkdir -p /etc/docker
+cat <<'EOF' | sudo tee /etc/docker/daemon.json
+{
+  "insecure-registries": ["192.168.1.11:5000"]
+}
+EOF
+sudo systemctl restart docker
+
 docker build -t 192.168.1.11:5000/recipe-scraper-training:latest -f training/Dockerfile training
 docker push 192.168.1.11:5000/recipe-scraper-training:latest
 ```
