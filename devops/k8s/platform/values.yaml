@@ -1,211 +1,195 @@
-namespace:
-  create: true
-
-postgres:
-  image:
-    repository: postgres
-    tag: "16"
-    pullPolicy: IfNotPresent
-  service:
-    port: 5432
-  persistence:
-    enabled: true
-    size: 10Gi
-    accessMode: ReadWriteOnce
-    storageClass: ""
-  auth:
-    existingSecret: ""
-    username: user
-    password: password
-    database: mlflowdb
-
-mlflow:
-  image:
-    repository: ghcr.io/mlflow/mlflow
-    tag: "v3.9.0"
-    pullPolicy: IfNotPresent
-  service:
-    type: NodePort
-    port: 8000
-    nodePort: 30800
-  trackingUri: "http://0.0.0.0:8000"
-  loggingLevel: "ERROR"
-  allowedHosts: "*"
-  s3:
-    endpointUrl: "https://chi.tacc.chameleoncloud.org:7480"
-    existingSecret: "mlflow-s3-credentials"
-    accessKeyId: ""
-    secretAccessKey: ""
-    bucketName: "ObjStore_proj22"
-    region: ""
-    caBundle: ""
-    preflight:
-      enabled: true
-  resources:
-    requests:
-      memory: "1Gi"
-      cpu: "200m"
-    limits:
-      memory: "2Gi"
-      cpu: "1"
-
 data:
-  persistence:
-    enabled: true
-    size: 10Gi
-    accessMode: ReadWriteOnce
-    storageClass: ""
-  jobs:
-    image:
-      repository: 192.168.1.11:5000/recipe-scraper-data
-      tag: "latest"
-      pullPolicy: IfNotPresent
-    mountPath: /data
-  trainingQuality:
-    enabled: false
-    schedule: "0 0 * * 1,4"
-    resources:
-      requests:
-        memory: "256Mi"
-        cpu: "100m"
-      limits:
-        memory: "512Mi"
-        cpu: "500m"
   driftMonitor:
     enabled: false
-    schedule: "0 * * * *"
     resources:
-      requests:
-        memory: "256Mi"
-        cpu: "100m"
       limits:
-        memory: "512Mi"
-        cpu: "500m"
-
-trainingJob:
-  enabled: false
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 86400
-  activeDeadlineSeconds: null
-  labels: {}
-  annotations: {}
-  podLabels: {}
-  podAnnotations: {}
-  nodeSelector:
-    kubernetes.io/hostname: gpu-node
-  tolerations:
-    - key: nvidia.com/gpu
-      operator: Exists
-      effect: NoSchedule
-  image:
-    # `fullName` lets the chart use a fully-qualified image reference
-    # such as ghcr.io/org/recipe-scraper-training:sha-abc123.
-    fullName: "192.168.1.11:5000/recipe-scraper-training:latest"
-    repository: recipe-scraper-training
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  imagePullSecrets: []
-  mlflowPreflight:
-    enabled: true
-    checkArtifactStore: true
-    artifactCredentialsSecret: ""
-  modelCache:
-    prewarmEnabled: false
-  storage:
-    enabled: true
-    # Legacy catch-all root for datasets and training outputs.
-    # Prefer the split mount paths below when those locations need to diverge.
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    schedule: 0 * * * *
+  jobs:
+    image:
+      pullPolicy: IfNotPresent
+      repository: 192.168.1.11:5000/recipe-scraper-data
+      tag: latest
     mountPath: /data
-    # Optional explicit mount points for the shared training volume.
-    # When set, the chart mounts the same volume at each distinct path.
-    datasetMountPath: /data
-    checkpointMountPath: /data/checkpoints
-    hfCacheMountPath: /data/checkpoints/huggingface-cache
-  env:
-    trainScript: /app/train.py
-    trainConfig: /app/config/config.yaml
-    trainMode: train
-    dataDir: /data
-    trainJsonlPath: ""
-    evalJsonlPath: ""
-    checkpointDir: /data/checkpoints/recipe-correction
-    # Keep the Hugging Face model cache on the mounted training volume so
-    # first-run downloads are reusable across later Jobs.
-    hfCacheDir: /data/checkpoints/huggingface-cache
-    numProcesses: "1"
-    extraArgs: ""
-  resources:
-    requests:
-      memory: "2Gi"
-      cpu: "500m"
-      nvidia.com/gpu: 1
-    limits:
-      memory: "6Gi"
-      cpu: "2"
-      nvidia.com/gpu: 1
-
-triton:
+  persistence:
+    accessMode: ReadWriteOnce
+    enabled: true
+    size: 10Gi
+    storageClass: ''
+  trainingQuality:
+    enabled: false
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    schedule: 0 0 * * 1,4
+grafana:
+  adminPassword: admin
   enabled: true
-  rollout:
-    # This cluster currently has a single schedulable GPU node for Triton.
-    # Keep surge at zero so updates replace the old pod instead of trying
-    # to run stable and canary revisions concurrently.
-    maxSurge: 0
-    maxUnavailable: 1
   image:
-    repository: graceritamcgrath/triton-custom
-    tag: "24.10-py3"
     pullPolicy: IfNotPresent
-  service:
-    type: NodePort
-    httpNodePort: 30910
-    grpcNodePort: 30911
-  openrc:
-    existingSecret: "triton-openrc"
+    repository: grafana/grafana
+    tag: 10.4.0
   resources:
-    requests:
-      memory: "8Gi"
-      cpu: "2"
-      ephemeral-storage: "5Gi"
     limits:
-      memory: "12Gi"
-      cpu: "4"
-      ephemeral-storage: "10Gi"
-
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  service:
+    nodePort: 30903
+    port: 3000
+    type: NodePort
+mlflow:
+  allowedHosts: '*'
+  image:
+    pullPolicy: IfNotPresent
+    repository: ghcr.io/mlflow/mlflow
+    tag: v3.9.0
+  loggingLevel: ERROR
+  resources:
+    limits:
+      cpu: '1'
+      memory: 2Gi
+    requests:
+      cpu: 200m
+      memory: 1Gi
+  s3:
+    accessKeyId: ''
+    bucketName: ObjStore_proj22
+    caBundle: ''
+    endpointUrl: https://chi.tacc.chameleoncloud.org:7480
+    existingSecret: mlflow-s3-credentials
+    preflight:
+      enabled: true
+    region: ''
+    secretAccessKey: ''
+  service:
+    nodePort: 30800
+    port: 8000
+    type: NodePort
+  trackingUri: http://0.0.0.0:8000
+namespace:
+  create: true
+postgres:
+  auth:
+    database: mlflowdb
+    existingSecret: ''
+    password: password
+    username: user
+  image:
+    pullPolicy: IfNotPresent
+    repository: postgres
+    tag: '16'
+  persistence:
+    accessMode: ReadWriteOnce
+    enabled: true
+    size: 10Gi
+    storageClass: ''
+  service:
+    port: 5432
 prometheus:
   enabled: true
   image:
-    repository: prom/prometheus
-    tag: "v2.51.0"
     pullPolicy: IfNotPresent
-  service:
-    type: NodePort
-    port: 9090
-    nodePort: 30902
-  retention: "7d"
+    repository: prom/prometheus
+    tag: v2.51.0
   resources:
-    requests:
-      memory: "512Mi"
-      cpu: "200m"
     limits:
-      memory: "1Gi"
-      cpu: "500m"
-
-grafana:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  retention: 7d
+  service:
+    nodePort: 30902
+    port: 9090
+    type: NodePort
+trainingJob:
+  activeDeadlineSeconds: null
+  annotations: {}
+  backoffLimit: 0
+  enabled: false
+  env:
+    checkpointDir: /data/checkpoints/recipe-correction
+    dataDir: /data
+    evalJsonlPath: ''
+    extraArgs: ''
+    hfCacheDir: /data/checkpoints/huggingface-cache
+    numProcesses: '1'
+    trainConfig: /app/config/config.yaml
+    trainJsonlPath: ''
+    trainMode: train
+    trainScript: /app/train.py
+  image:
+    fullName: 192.168.1.11:5000/recipe-scraper-training:latest
+    pullPolicy: IfNotPresent
+    repository: recipe-scraper-training
+    tag: latest
+  imagePullSecrets: []
+  labels: {}
+  mlflowPreflight:
+    artifactCredentialsSecret: ''
+    checkArtifactStore: true
+    enabled: true
+  modelCache:
+    prewarmEnabled: false
+  nodeSelector:
+    kubernetes.io/hostname: gpu-node
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    limits:
+      cpu: '2'
+      memory: 6Gi
+      nvidia.com/gpu: 1
+    requests:
+      cpu: 500m
+      memory: 2Gi
+      nvidia.com/gpu: 1
+  storage:
+    checkpointMountPath: /data/checkpoints
+    datasetMountPath: /data
+    enabled: true
+    hfCacheMountPath: /data/checkpoints/huggingface-cache
+    mountPath: /data
+  tolerations:
+  - effect: NoSchedule
+    key: nvidia.com/gpu
+    operator: Exists
+  ttlSecondsAfterFinished: 86400
+triton:
   enabled: true
   image:
-    repository: grafana/grafana
-    tag: "10.4.0"
     pullPolicy: IfNotPresent
-  service:
-    type: NodePort
-    port: 3000
-    nodePort: 30903
-  adminPassword: "admin"
+    repository: graceritamcgrath/triton-custom
+    tag: 24.10-py3
+  modelPrefix: 2/9ad35516dbdb42dcbfb9507122173380/artifacts/checkpoints/best
+  modelVersion: 9ad35516
+  openrc:
+    existingSecret: triton-openrc
   resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
     limits:
-      memory: "512Mi"
-      cpu: "500m"
+      cpu: '4'
+      ephemeral-storage: 10Gi
+      memory: 12Gi
+    requests:
+      cpu: '2'
+      ephemeral-storage: 5Gi
+      memory: 8Gi
+  rollout:
+    maxSurge: 0
+    maxUnavailable: 1
+  service:
+    grpcNodePort: 30911
+    httpNodePort: 30910
+    type: NodePort
