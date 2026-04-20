@@ -57,11 +57,7 @@ data:
     storageClass: ""
   jobs:
     image:
-<<<<<<< HEAD
       repository: 192.168.1.11:5000/recipe-scraper-data
-=======
-      repository: recipe-scraper-data
->>>>>>> origin/main
       tag: "latest"
       pullPolicy: IfNotPresent
     mountPath: /data
