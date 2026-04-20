@@ -154,6 +154,46 @@ def summarize_trial_counts(study: optuna.study.Study) -> dict[str, int]:
     return counts
 
 
+def report_trial_progress_update(
+    *,
+    update: dict[str, Any],
+    trial: optuna.trial.Trial,
+    prune_signal_path: Path,
+) -> None:
+    epoch = int(update["epoch"])
+    metric_name = update.get("objective_metric_name")
+    current_metric_raw = update.get("current_metric")
+    metric_available = bool(update.get("objective_metric_available", current_metric_raw is not None))
+
+    if not metric_available or current_metric_raw is None:
+        emit_console_summary(
+            print,
+            f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
+            {
+                "global_step": update["global_step"],
+                "objective_metric": metric_name,
+                "status": "skipped",
+                "reason": "objective metric not available for this evaluation pass",
+            },
+        )
+        return
+
+    current_metric = float(current_metric_raw)
+    emit_console_summary(
+        print,
+        f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
+        {
+            "global_step": update["global_step"],
+            "objective_metric": metric_name,
+            "current_value": current_metric,
+        },
+    )
+    trial.report(current_metric, step=epoch)
+    if trial.should_prune() and not prune_signal_path.exists():
+        print(f"[tune] pruning requested for trial {trial.number} at epoch {epoch}.", flush=True)
+        prune_signal_path.write_text("1\n", encoding="utf-8")
+
+
 def run_distributed_trial(
     cfg: dict[str, Any],
     context: TrainingContext,
@@ -218,40 +258,20 @@ def run_distributed_trial(
         seen_epochs: set[int] = set()
         while process.poll() is None:
             for update in load_progress_updates(progress_path, seen_epochs):
-                current_metric = float(update["current_metric"])
-                epoch = int(update["epoch"])
-                emit_console_summary(
-                    print,
-                    f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
-                    {
-                        "global_step": update["global_step"],
-                        "objective_metric": update["objective_metric_name"],
-                        "current_value": current_metric,
-                    },
+                report_trial_progress_update(
+                    update=update,
+                    trial=trial,
+                    prune_signal_path=prune_signal_path,
                 )
-                trial.report(current_metric, step=epoch)
-                if trial.should_prune() and not prune_signal_path.exists():
-                    print(f"[tune] pruning requested for trial {trial.number} at epoch {epoch}.", flush=True)
-                    prune_signal_path.write_text("1\n", encoding="utf-8")
             time.sleep(1.0)
 
         return_code = process.wait()
         for update in load_progress_updates(progress_path, seen_epochs):
-            current_metric = float(update["current_metric"])
-            epoch = int(update["epoch"])
-            emit_console_summary(
-                print,
-                f"TUNE TRIAL {trial.number:04d} EPOCH {epoch}",
-                {
-                    "global_step": update["global_step"],
-                    "objective_metric": update["objective_metric_name"],
-                    "current_value": current_metric,
-                },
+            report_trial_progress_update(
+                update=update,
+                trial=trial,
+                prune_signal_path=prune_signal_path,
             )
-            trial.report(current_metric, step=epoch)
-            if trial.should_prune() and not prune_signal_path.exists():
-                print(f"[tune] pruning requested for trial {trial.number} at epoch {epoch}.", flush=True)
-                prune_signal_path.write_text("1\n", encoding="utf-8")
 
         if not result_path.exists():
             raise RuntimeError(
