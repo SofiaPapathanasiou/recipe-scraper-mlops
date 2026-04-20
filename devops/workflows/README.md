@@ -9,9 +9,16 @@ Files:
 - `workflow-template-training.yaml`: reusable training `WorkflowTemplate`
 - `cronworkflow-retraining.yaml`: scheduled retraining `CronWorkflow`
 - `manual-training-workflow.yaml`: on-demand workflow submission example
+- `kustomization.yaml`: the GitOps entrypoint ArgoCD syncs for long-lived workflow resources
 
 Important current default:
 
 - The `CronWorkflow` is suspended by default because the only cluster GPU is
   already reserved by Triton on `gpu-node`. Unsuspend it only after GPU
   capacity or serving allocation changes.
+
+GitOps note:
+
+- `manual-training-workflow.yaml` is intentionally not included in
+  `kustomization.yaml`. It uses `generateName` and is meant to be submitted
+  manually, not continuously reconciled by ArgoCD.
