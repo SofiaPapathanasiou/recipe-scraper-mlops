@@ -29,3 +29,12 @@ nvidia_gpu_nodes:
 # Lower eviction threshold to allow large images
 kubelet_eviction_hard:
   ephemeral-storage: 2Gi
+
+# Local registry currently serves plain HTTP on port 5000.
+# Mirror configuration keeps containerd from forcing HTTPS for in-cluster images.
+containerd_registries_mirrors:
+  - prefix: 192.168.1.11:5000
+    mirrors:
+      - host: http://192.168.1.11:5000
+        capabilities: ["pull", "resolve"]
+        skip_verify: true
