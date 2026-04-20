@@ -189,9 +189,40 @@ def check_for_user_edits(slug, cleaned_at, original_input):
         ])
         user_version = f"Title: {title}\nIngredients: {ingredients}\nInstructions: {instructions}"
         save_feedback(original_input, user_version, source="user_correction")
+        post_feedback(slug, "reject")
         print(f"User correction captured for: {title}")
         return updated_at
     return None
+def check_feedback_endpoint(slug, original_input, cleaned_output):
+    """Check if user accepted or rejected the cleaned recipe."""
+    response = requests.get(
+        f"{MEALIE_URL}/api/ml/feedback",
+        headers=HEADERS,
+        params={"slug": slug}
+    )
+    if response.status_code != 200:
+        return
+    
+    data = response.json()
+    rating = data.get("rating")
+    
+    if rating == "accept":
+        save_feedback(original_input, cleaned_output, source="accepted")
+        print(f"Recipe accepted: {slug}")
+    elif rating == "reject":
+        save_feedback(original_input, original_input, source="rejected")
+        print(f"Recipe rejected: {slug}")
+
+def post_feedback(slug, rating):
+    """Post feedback signal to Prometheus monitoring endpoint."""
+    response = requests.post(
+        f"{MEALIE_URL}/api/ml/feedback",
+        params={"slug": slug, "rating": rating}
+    )
+    if response.status_code == 200:
+        print(f"Feedback posted: slug={slug} rating={rating}")
+    else:
+        print(f"Failed to post feedback: {response.status_code}")
 
 def main():
     print("Starting Mealie recipe cleaner...")
