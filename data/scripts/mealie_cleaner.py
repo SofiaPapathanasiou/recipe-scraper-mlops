@@ -1,34 +1,13 @@
 #!/usr/bin/env python3
-<<<<<<< HEAD
-"""
-mealie_cleaner.py
-Polls Mealie for new recipes, sends them to Triton for cleaning,
-and updates them back in Mealie.
-"""
-import json
-import time
-=======
 import json
 import os
 import time
 import subprocess
->>>>>>> origin/main
 import requests
 
 MEALIE_URL = "http://129.114.26.25:30900"
 TRITON_URL = "http://129.114.26.25:30910"
 MEALIE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJsb25nX3Rva2VuIjp0cnVlLCJpZCI6IjE3MWIyMTVmLTg5OTQtNDU0Ny1hZjFjLTUxNTc5NzFlNDdhMCIsIm5hbWUiOiJtbG9wcyIsImludGVncmF0aW9uX2lkIjoiZ2VuZXJpYyIsImV4cCI6MTkzNDIyNTMwMH0.Oum8pAQDTnttoM55AOR5OOJZUfrItbPCaqwQKU9FDhw"
-<<<<<<< HEAD
-
-HEADERS = {"Authorization": f"Bearer {MEALIE_TOKEN}"}
-
-def format_recipe_for_triton(recipe):
-    title = recipe.get("name", "")
-    ingredients = " | ".join([i.get("display", "") for i in recipe.get("recipeIngredient", [])])
-    instructions = " | ".join([s.get("text", "") for s in recipe.get("recipeInstructions", [])])
-    return f"fix recipe: Title: {title}\nIngredients: {ingredients}\nInstructions: {instructions}"
-
-=======
 FEEDBACK_FILE = "/tmp/feedback_pairs.jsonl"
 CONTAINER = "ObjStore_proj22"
 HEADERS = {"Authorization": f"Bearer {MEALIE_TOKEN}", "Content-Type": "application/json"}
@@ -118,7 +97,6 @@ def format_cleaned_note(cleaned_text):
             result.append(line)
     return "\n".join(result)
 
->>>>>>> origin/main
 def call_triton(text):
     payload = {
         "inputs": [{
@@ -145,11 +123,6 @@ def get_recipe(slug):
         return response.json()
     return None
 
-<<<<<<< HEAD
-def main():
-    print("Starting Mealie recipe cleaner...")
-    processed = set()
-=======
 def add_note_to_recipe(slug, original_input, cleaned_output):
     """Add original and cleaned recipe as notes so user can compare."""
     payload = {
@@ -216,53 +189,18 @@ def check_for_user_edits(slug, cleaned_at, original_input):
         ])
         user_version = f"Title: {title}\nIngredients: {ingredients}\nInstructions: {instructions}"
         save_feedback(original_input, user_version, source="user_correction")
-        post_feedback(slug, "reject")
         print(f"User correction captured for: {title}")
         return updated_at
     return None
-def check_feedback_endpoint(slug, original_input, cleaned_output):
-    """Check if user accepted or rejected the cleaned recipe."""
-    response = requests.get(
-        f"{MEALIE_URL}/api/ml/feedback",
-        headers=HEADERS,
-        params={"slug": slug}
-    )
-    if response.status_code != 200:
-        return
-    
-    data = response.json()
-    rating = data.get("rating")
-    
-    if rating == "accept":
-        save_feedback(original_input, cleaned_output, source="accepted")
-        print(f"Recipe accepted: {slug}")
-    elif rating == "reject":
-        save_feedback(original_input, original_input, source="rejected")
-        print(f"Recipe rejected: {slug}")
-
-def post_feedback(slug, rating):
-    """Post feedback signal to Prometheus monitoring endpoint."""
-    response = requests.post(
-        f"{MEALIE_URL}/api/ml/feedback",
-        params={"slug": slug, "rating": rating}
-    )
-    if response.status_code == 200:
-        print(f"Feedback posted: slug={slug} rating={rating}")
-    else:
-        print(f"Failed to post feedback: {response.status_code}")
 
 def main():
     print("Starting Mealie recipe cleaner...")
     processed = load_processed()
->>>>>>> origin/main
 
     while True:
         recipes = get_recipes()
         for r in recipes:
             slug = r.get("slug")
-<<<<<<< HEAD
-            if slug in processed:
-=======
 
             if slug in processed:
                 new_time = check_for_user_edits(
@@ -273,7 +211,6 @@ def main():
                 if new_time:
                     processed[slug]["cleaned_at"] = new_time
                     save_processed(processed)
->>>>>>> origin/main
                 continue
 
             recipe = get_recipe(slug)
@@ -281,14 +218,6 @@ def main():
                 continue
 
             print(f"Processing: {recipe.get('name')}")
-<<<<<<< HEAD
-            text = format_recipe_for_triton(recipe)
-            cleaned = call_triton(text)
-
-            if cleaned:
-                print(f"Cleaned: {cleaned[:100]}...")
-                processed.add(slug)
-=======
             original_input = format_recipe_for_triton(recipe)
             cleaned = call_triton(original_input)
 
@@ -301,7 +230,6 @@ def main():
                     "original_input": original_input
                 }
                 save_processed(processed)
->>>>>>> origin/main
             else:
                 print(f"Failed to clean: {slug}")
 

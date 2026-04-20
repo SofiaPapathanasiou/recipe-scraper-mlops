@@ -34,6 +34,7 @@ spec:
         - /bin/sh
         - -c
         - until pg_isready -h postgres -p {{ .Values.postgres.service.port }} -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+<<<<<<< HEAD
 {{- if .Values.mlflow.s3.preflight.enabled }}
       - name: verify-artifact-store
         image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
@@ -91,6 +92,8 @@ spec:
           print(f"Deleted preflight object {object_key}")
           PY
 {{- end }}
+=======
+>>>>>>> origin/main
       containers:
       - name: mlflow
         image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
@@ -124,6 +127,7 @@ spec:
           value: {{ .Values.mlflow.allowedHosts | quote }}
         - name: MLFLOW_S3_ENDPOINT_URL
           value: {{ .Values.mlflow.s3.endpointUrl | quote }}
+<<<<<<< HEAD
 {{- with .Values.mlflow.s3.region }}
         - name: AWS_DEFAULT_REGION
           value: {{ . | quote }}
@@ -134,6 +138,8 @@ spec:
         - name: AWS_CA_BUNDLE
           value: {{ . | quote }}
 {{- end }}
+=======
+>>>>>>> origin/main
         - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:

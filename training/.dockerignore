@@ -8,8 +8,11 @@
 data/
 checkpoints/
 .cache/
+<<<<<<< HEAD
 .venv/
 mlruns/
+=======
+>>>>>>> origin/main
 
 # Python bytecode
 __pycache__/

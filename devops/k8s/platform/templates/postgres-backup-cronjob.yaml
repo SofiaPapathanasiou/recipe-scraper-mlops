@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: recipe-scraper-platform
+spec:
+  schedule: "0 */6 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: postgres-backup
+            image: 192.168.1.11:5000/recipe-scraper-data:latest
+            imagePullPolicy: Always
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: dbname
+            - name: OS_AUTH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: swift-credentials
+                  key: OS_AUTH_URL
+            - name: OS_APPLICATION_CREDENTIAL_ID
+              valueFrom:
+                secretKeyRef:
+                  name: swift-credentials
+                  key: OS_APPLICATION_CREDENTIAL_ID
+            - name: OS_APPLICATION_CREDENTIAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: swift-credentials
+                  key: OS_APPLICATION_CREDENTIAL_SECRET
+            - name: OS_AUTH_TYPE
+              valueFrom:
+                secretKeyRef:
+                  name: swift-credentials
+                  key: OS_AUTH_TYPE
+            command:
+            - /bin/sh
+            - -c
+            - |
+              pg_dump -h postgres -U $PGUSER $PGDATABASE > /tmp/backup.sql
+              swift upload ObjStore_proj22 /tmp/backup.sql \
+                --object-name backups/postgres/backup_$(date +%Y%m%d_%H%M%S).sql
+              echo "Backup complete!"
+          restartPolicy: OnFailure

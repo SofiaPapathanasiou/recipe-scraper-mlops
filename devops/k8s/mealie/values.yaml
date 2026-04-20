@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 namespace:
   create: true
 
@@ -31,6 +32,12 @@ env:
   modelVersion: v1.2
   extra: []
 
+=======
+replicaCount: 1
+service:
+  port: 80
+  externalIP: ""
+>>>>>>> origin/main
 resources:
   limits:
     cpu: "1000m"
@@ -38,3 +45,9 @@ resources:
   requests:
     cpu: "500m"
     memory: "512Mi"
+<<<<<<< HEAD
+=======
+triton:
+  serviceURL: "http://recipe-triton-svc.recipe-scraper-platform.svc.cluster.local:8000"
+  modelName: "recipe_model"
+>>>>>>> origin/main

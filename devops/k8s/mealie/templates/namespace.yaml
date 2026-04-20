@@ -1,6 +1,13 @@
+<<<<<<< HEAD
 {{- if .Values.namespace.create }}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Release.Namespace }}
 {{- end }}
+=======
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recipe-scraper-mealie
+>>>>>>> origin/main

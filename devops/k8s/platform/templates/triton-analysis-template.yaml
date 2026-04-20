@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:
@@ -16,3 +17,86 @@ spec:
           address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
           query: |
             sum(nv_inference_request_success)
+=======
+# apiVersion: argoproj.io/v1alpha1
+# kind: AnalysisTemplate
+# metadata:
+#   name: recipe-triton-analysis
+#   namespace: {{ .Release.Namespace }}
+# spec:
+#   metrics:
+#     - name: failure-rate
+#       interval: 1m
+#       count: 3
+#       successCondition: result[0] <= 0.05
+#       failureCondition: result[0] > 0.05
+#       failureLimit: 1
+#       provider:
+#         prometheus:
+#           address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
+#           query: |
+#             sum(nv_inference_request_success)
+
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: recipe-model-analysis
+  namespace: argo-rollouts
+spec:
+  args:
+  - name: model-version
+  metrics:
+
+  # Signal 1: User feedback — rejection rate must be < 25%
+  # Justified: feedback is collected every 6 hours via mealie_cleaner.
+  # A sustained rejection rate above 25% over a 12 hour window indicates
+  # model regression. Two consecutive failures (12h) required to avoid
+  # rolling back on a single outlier batch.
+  - name: user-feedback-rejection-rate
+    interval: 6h
+    failureLimit: 2
+    successCondition: result < 0.25
+    provider:
+      prometheus:
+        address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
+        query: |
+          sum(rate(model_feedback_negative_total[12h]))
+          /
+          (
+            sum(rate(model_feedback_positive_total[12h])) +
+            sum(rate(model_feedback_negative_total[12h]))
+          )
+
+  # Signal 2: Operational — Triton failure rate must be < 5%
+  # Justified: >5% failure rate means users are getting errors instead
+  # of cleaned recipes, unacceptable for production
+  - name: triton-error-rate
+    interval: 2m
+    failureLimit: 3
+    successCondition: result < 0.05
+    provider:
+      prometheus:
+        address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
+        query: |
+          sum(rate(nv_inference_request_failure[1h]))
+          /
+          (
+            sum(rate(nv_inference_request_success[1h])) +
+            sum(rate(nv_inference_request_failure[1h]))
+          )
+
+  # Signal 3: Model output — average inference latency must be < 10s
+  # Justified: recipe cleaning is user-initiated and synchronous;
+  # sustained latency above 10s degrades UX below acceptable threshold
+  - name: triton-latency
+    interval: 2m
+    failureLimit: 3
+    successCondition: result < 10000000
+    provider:
+      prometheus:
+        address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
+        query: |
+          rate(nv_inference_request_duration_us[1h])
+          /
+          rate(nv_inference_request_success[1h])
+>>>>>>> origin/main
