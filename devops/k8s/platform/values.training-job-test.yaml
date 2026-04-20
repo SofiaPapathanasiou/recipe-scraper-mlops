@@ -24,7 +24,7 @@ mlflow:
 trainingJob:
   enabled: true
   image:
-    fullName: recipe-training
+    fullName: 192.168.1.11:5000/recipe-scraper-training:latest
     pullPolicy: Never
   mlflowPreflight:
     enabled: false

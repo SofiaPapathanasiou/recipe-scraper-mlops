@@ -1,22 +1,25 @@
+{{- if .Values.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mealie-pvc
-  namespace: recipe-scraper-mealie
+  namespace: {{ .Release.Namespace }}
 spec:
   accessModes:
-  - ReadWriteOnce
+{{ toYaml .Values.persistence.accessModes | indent 4 }}
   resources:
     requests:
-      storage: 5Gi
+      storage: {{ .Values.persistence.size }}
+  storageClassName: {{ .Values.persistence.storageClassName | quote }}
 ---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mealie
-  namespace: recipe-scraper-mealie
+  namespace: {{ .Release.Namespace }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: mealie
@@ -27,41 +30,52 @@ spec:
     spec:
       containers:
       - name: mealie
-        image: graceritamcgrath/mealie-custom:latest
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - containerPort: 9000
+        - containerPort: {{ .Values.service.targetPort }}
         resources:
-          requests:
-            cpu: 500m
-            memory: 512Mi
-          limits:
-            cpu: 1000m
-            memory: 1Gi
+{{ toYaml .Values.resources | indent 10 }}
         env:
         - name: PUID
-          value: "1000"
+          value: {{ .Values.env.puid | quote }}
         - name: PGID
-          value: "1000"
+          value: {{ .Values.env.pgid | quote }}
         - name: TZ
-          value: "America/New_York"
+          value: {{ .Values.env.timezone | quote }}
+        - name: TRITON_SERVER_URL
+          value: {{ .Values.env.tritonServerUrl | quote }}
+        - name: TRITON_MODEL_NAME
+          value: {{ .Values.env.tritonModelName | quote }}
+        - name: API_DOCS
+          value: {{ .Values.env.apiDocs | quote }}
+        - name: MODEL_VERSION
+          value: {{ .Values.env.modelVersion | quote }}
+{{- with .Values.env.extra }}
+{{ toYaml . | indent 8 }}
+{{- end }}
         volumeMounts:
         - name: mealie-data
           mountPath: /app/data
       volumes:
       - name: mealie-data
+{{- if .Values.persistence.enabled }}
         persistentVolumeClaim:
           claimName: mealie-pvc
+{{- else }}
+        emptyDir: {}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mealie
-  namespace: recipe-scraper-mealie
+  namespace: {{ .Release.Namespace }}
 spec:
-  type: NodePort
+  type: {{ .Values.service.type }}
   selector:
     app: mealie
   ports:
-  - port: 80
-    targetPort: 9000
-    nodePort: 30900
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.targetPort }}
+    nodePort: {{ .Values.service.nodePort }}

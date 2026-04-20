@@ -57,7 +57,7 @@ data:
     storageClass: ""
   jobs:
     image:
-      repository: recipe-scraper-data
+      repository: 192.168.1.11:5000/recipe-scraper-data
       tag: "latest"
       pullPolicy: IfNotPresent
     mountPath: /data
@@ -100,7 +100,7 @@ trainingJob:
   image:
     # `fullName` lets the chart use a fully-qualified image reference
     # such as ghcr.io/org/recipe-scraper-training:sha-abc123.
-    fullName: ""
+    fullName: "192.168.1.11:5000/recipe-scraper-training:latest"
     repository: recipe-scraper-training
     tag: "latest"
     pullPolicy: IfNotPresent

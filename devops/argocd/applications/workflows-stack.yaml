@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recipe-scraper-argo-workflows
+  namespace: argocd
+spec:
+  project: recipe-scraper
+  source:
+    repoURL: https://github.com/SofiaPapathanasiou/recipe-scraper-mlops.git
+    targetRevision: HEAD
+    path: devops/k8s/argo-workflows
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo-workflows
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

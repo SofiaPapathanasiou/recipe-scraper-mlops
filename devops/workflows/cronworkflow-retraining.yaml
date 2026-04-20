@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: recipe-model-retraining
+  namespace: recipe-scraper-platform
+  annotations:
+    recipe-scraper-mlops/status: "Suspended by default because gpu-node is fully reserved by Triton as of 2026-04-20."
+spec:
+  schedule: "0 3 * * 1"
+  timezone: Etc/UTC
+  suspend: true
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  workflowSpec:
+    workflowTemplateRef:
+      name: recipe-model-training
+    arguments:
+      parameters:
+        - name: training-image
+          value: 192.168.1.11:5000/recipe-scraper-training:latest
+        - name: training-mode
+          value: train
+        - name: training-config
+          value: /app/config/config.yaml
+        - name: pvc-name
+          value: data-pvc

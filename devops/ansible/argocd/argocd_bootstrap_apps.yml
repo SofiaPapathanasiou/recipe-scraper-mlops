@@ -1,0 +1,22 @@
+---
+- name: Bootstrap ArgoCD applications from Git-tracked manifests
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Apply ArgoCD project and application manifests through node1
+      shell: |
+        {
+          for manifest in \
+            /home/cc/recipe-scraper-mlops/devops/argocd/project.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/platform.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/workflows-stack.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/workflows-jobs.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/staging.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/canary.yaml \
+            /home/cc/recipe-scraper-mlops/devops/argocd/applications/production.yaml
+          do
+            cat "$manifest"
+            printf '\n---\n'
+          done
+        } | ssh node1 kubectl apply -f -

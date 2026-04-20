@@ -17,6 +17,15 @@ recipe-scraper-mlops/
 ## Current Status
 Initial implementation in progress. We are currently setting up the core components for data processing, model training, inference serving, and deployment.
 
+## Argo Workflows
+
+The Argo Workflows control plane is managed from
+[`devops/k8s/argo-workflows`](/home/cc/recipe-scraper-mlops/devops/k8s/argo-workflows/kustomization.yaml:1)
+and applied through a dedicated Argo CD app.
+
+Training workflow resources live under
+[`devops/workflows`](/home/cc/recipe-scraper-mlops/devops/workflows/README.md:1).
+
 ## Team
 - **Training:** Yathin Reddy Duvuru
 - **Serving:** Grace McGrath

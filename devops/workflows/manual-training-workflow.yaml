@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: recipe-model-training-
+  namespace: recipe-scraper-platform
+spec:
+  workflowTemplateRef:
+    name: recipe-model-training
+  arguments:
+    parameters:
+      - name: training-image
+        value: 192.168.1.11:5000/recipe-scraper-training:latest
+      - name: training-mode
+        value: train
+      - name: training-config
+        value: /app/config/config.yaml
+      - name: pvc-name
+        value: data-pvc

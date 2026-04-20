@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: recipe-scraper-canary
+  namespace: argocd
+spec:
+  project: recipe-scraper
+  source:
+    repoURL: https://github.com/SofiaPapathanasiou/recipe-scraper-mlops.git
+    targetRevision: HEAD
+    path: devops/k8s/mealie
+    helm:
+      valueFiles:
+        - values.yaml
+        - values.canary.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: recipe-scraper-canary
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

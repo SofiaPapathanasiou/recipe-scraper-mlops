@@ -1,0 +1,8 @@
+service:
+  nodePort: 30901
+
+env:
+  modelVersion: canary
+  extra:
+    - name: RECIPE_SCRAPER_ENV
+      value: canary

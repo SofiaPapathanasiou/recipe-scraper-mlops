@@ -48,11 +48,33 @@ Build the training image:
 docker compose --profile training build training
 ```
 
+Build and publish the training image to the cluster-local registry:
+
+```bash
+docker build -t 192.168.1.11:5000/recipe-scraper-training:latest -f training/Dockerfile training
+docker push 192.168.1.11:5000/recipe-scraper-training:latest
+```
+
 Build both images:
 
 ```bash
 docker compose --profile training build
 ```
+
+## Argo Workflow Integration
+
+The cluster workflow resources use the same training container entrypoint and
+config contract as the Kubernetes training Job template. The reusable workflow
+definitions live under
+[`devops/workflows`](/home/cc/recipe-scraper-mlops/devops/workflows/README.md:1).
+
+Current default behavior:
+
+- The scheduled retraining `CronWorkflow` is created suspended.
+- This is intentional because, on April 20, 2026, the only GPU node is already
+  fully reserved by Triton serving.
+- After the training image is pushed and GPU capacity is available, you can
+  unsuspend the `recipe-model-retraining` CronWorkflow.
 
 ## Bring Up Jupyter
 
