@@ -23,6 +23,7 @@ mlflow:
 
 trainingJob:
   enabled: true
+  description: Enable only for Helm-based smoke tests. Manual training should be launched from the Argo Workflows UI using the recipe-model-training template.
   image:
     fullName: 192.168.1.11:5000/recipe-scraper-training:latest
     pullPolicy: Never
@@ -35,3 +36,5 @@ trainingJob:
     numProcesses: "1"
     checkpointDir: /data/checkpoints/recipe-correction
     hfCacheDir: /data/checkpoints/huggingface-cache
+  storage:
+    claimName: data-pvc-gpu

@@ -4,7 +4,7 @@ metadata:
   name: recipe-model-retraining
   namespace: recipe-scraper-platform
   annotations:
-    recipe-scraper-mlops/status: "Suspended by default because gpu-node is fully reserved by Triton as of 2026-04-20."
+    recipe-scraper-mlops/status: "Scheduled retraining uses the shared recipe-model-training WorkflowTemplate and defaults to the gpu-node-local data-pvc-gpu claim."
 spec:
   schedule: "0 3 * * 1"
   timezone: Etc/UTC
@@ -25,4 +25,4 @@ spec:
         - name: training-config
           value: /app/config/config.yaml
         - name: pvc-name
-          value: data-pvc
+          value: data-pvc-gpu

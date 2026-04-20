@@ -251,7 +251,7 @@ spec:
         - name: training-data
           {{- if .Values.data.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: data-pvc
+            claimName: {{ .Values.trainingJob.storage.claimName | default .Values.data.persistence.claimName }}
           {{- else }}
           emptyDir: {}
           {{- end }}

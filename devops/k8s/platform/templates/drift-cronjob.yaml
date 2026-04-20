@@ -33,7 +33,7 @@ spec:
             - name: data
               {{- if .Values.data.persistence.enabled }}
               persistentVolumeClaim:
-                claimName: data-pvc
+                claimName: {{ .Values.data.driftMonitor.existingClaim | default .Values.data.persistence.claimName }}
               {{- else }}
               emptyDir: {}
               {{- end }}

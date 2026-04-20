@@ -15,7 +15,7 @@ spec:
       - name: training-config
         value: /app/config/config.yaml
       - name: pvc-name
-        value: data-pvc
+        value: data-pvc-gpu
       - name: data-dir
         value: /data
       - name: num-processes

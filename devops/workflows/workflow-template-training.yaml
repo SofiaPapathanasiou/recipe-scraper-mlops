@@ -24,7 +24,7 @@ spec:
       - name: training-config
         value: /app/config/config.yaml
       - name: pvc-name
-        value: data-pvc
+        value: data-pvc-gpu
       - name: data-dir
         value: /data
       - name: checkpoint-dir
@@ -167,7 +167,7 @@ spec:
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
       metadata:
         annotations:
-          recipe-scraper-mlops/gpu-blocked-note: "This pod requests the only cluster GPU and will remain Pending while Triton is using gpu-node."
+          recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default; it will remain Pending while Triton is using the only cluster GPU."
       podSpecPatch: |
         nodeSelector:
           kubernetes.io/hostname: gpu-node
