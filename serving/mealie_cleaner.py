@@ -5,9 +5,9 @@ import time
 import subprocess
 import requests
 
-MEALIE_URL = "http://129.114.26.25:30900"
+MEALIE_URL = os.environ.get("MEALIE_URL", "http://129.114.26.25:30904")
 TRITON_URL = "http://129.114.26.25:30910"
-MEALIE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJsb25nX3Rva2VuIjp0cnVlLCJpZCI6IjE3MWIyMTVmLTg5OTQtNDU0Ny1hZjFjLTUxNTc5NzFlNDdhMCIsIm5hbWUiOiJtbG9wcyIsImludGVncmF0aW9uX2lkIjoiZ2VuZXJpYyIsImV4cCI6MTkzNDIyNTMwMH0.Oum8pAQDTnttoM55AOR5OOJZUfrItbPCaqwQKU9FDhw"
+MEALIE_TOKEN = os.environ.get("MEALIE_TOKEN", "")
 FEEDBACK_FILE = "/tmp/feedback_pairs.jsonl"
 CONTAINER = "ObjStore_proj22"
 HEADERS = {"Authorization": f"Bearer {MEALIE_TOKEN}", "Content-Type": "application/json"}
