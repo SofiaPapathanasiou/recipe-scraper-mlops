@@ -15,6 +15,10 @@ spec:
     - name: training-data
       persistentVolumeClaim:
         claimName: "{{workflow.parameters.pvc-name}}"
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
   arguments:
     parameters:
       - name: training-image
@@ -167,21 +171,8 @@ spec:
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
       metadata:
         annotations:
-          recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default; it will remain Pending while Triton is using the only cluster GPU."
+          recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default."
       podSpecPatch: |
-        containers:
-          - name: resource-monitor
-            image: nvidia/cuda:12.4.1-base-ubuntu22.04 # Needs nvidia-smi binaries
-            command: ["/bin/sh", "-c"]
-            args:
-              - |
-                while true; do
-                  echo "--- SYSTEM MEMORY ---"
-                  free -m
-                  echo "--- GPU STATUS ---"
-                  nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv,noheader,nounits
-                  sleep 10
-                done
         runtimeClassName: nvidia
         nodeSelector:
           kubernetes.io/hostname: gpu-node
@@ -189,11 +180,34 @@ spec:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
+        containers:
+          - name: main
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+          - name: resource-monitor
+            image: nvidia/cuda:12.4.1-base-ubuntu22.04
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                while true; do
+                  echo "--- [$(date)] RESOURCE CHECK ---"
+                  free -m
+                  nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv,noheader
+                  sleep 15
+                done
       container:
+        name: main
         image: "{{inputs.parameters.training-image}}"
         imagePullPolicy: Always
         workingDir: /app
         env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: "all"
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: "compute,utility"
+          - name: ACCELERATE_USE_CPU
+            value: "false"
           - name: MLFLOW_TRACKING_URI
             value: "{{inputs.parameters.mlflow-tracking-uri}}"
           - name: DATA_DIR
@@ -231,18 +245,14 @@ spec:
         volumeMounts:
           - name: training-data
             mountPath: "{{inputs.parameters.data-dir}}"
-          - name: training-data
-            mountPath: "{{inputs.parameters.checkpoint-dir}}"
-          - name: training-data
-            mountPath: "{{inputs.parameters.hf-cache-dir}}"
         resources:
           requests:
-            cpu: "500m"
+            cpu: "2"
             memory: "32Gi"
-            ephemeral-storage: "2Gi"
+            ephemeral-storage: "4Gi"
             nvidia.com/gpu: "1"
           limits:
             cpu: "4"
             memory: "128Gi"
-            ephemeral-storage: "8Gi"
+            ephemeral-storage: "10Gi"
             nvidia.com/gpu: "1"
