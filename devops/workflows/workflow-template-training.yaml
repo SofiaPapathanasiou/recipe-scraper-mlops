@@ -225,11 +225,11 @@ spec:
         resources:
           requests:
             cpu: "500m"
-            memory: "2Gi"
+            memory: "16Gi"
             ephemeral-storage: "2Gi"
             nvidia.com/gpu: "1"
           limits:
-            cpu: "2"
-            memory: "12Gi"
+            cpu: "4"
+            memory: "64Gi"
             ephemeral-storage: "8Gi"
             nvidia.com/gpu: "1"
