@@ -179,7 +179,7 @@ trainingJob:
     operator: Exists
   ttlSecondsAfterFinished: 86400
 triton:
-  enabled: true
+  enabled: false
   image:
     pullPolicy: IfNotPresent
     repository: graceritamcgrath/triton-custom
