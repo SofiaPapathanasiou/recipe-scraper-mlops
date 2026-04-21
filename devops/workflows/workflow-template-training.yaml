@@ -205,9 +205,11 @@ spec:
           - name: NVIDIA_VISIBLE_DEVICES
             value: "all"
           - name: NVIDIA_DRIVER_CAPABILITIES
-            value: "compute,utility"
+            value: "all"
           - name: ACCELERATE_USE_CPU
             value: "false"
+          - name: LD_LIBRARY_PATH
+            value: "/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH}"
           - name: MLFLOW_TRACKING_URI
             value: "{{inputs.parameters.mlflow-tracking-uri}}"
           - name: DATA_DIR
