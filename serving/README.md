@@ -89,11 +89,22 @@ The serving layer consists of:
 
 ---
 
-## 5. Deploy the Platform
+## 5. Deploy All Environments via ArgoCD
 
-    helm upgrade --install platform devops/k8s/platform \
-      -n recipe-scraper-platform \
-      --create-namespace
+    kubectl apply -f devops/argocd/project.yaml
+    kubectl apply -f devops/argocd/applications/
+
+This deploys all environments and services via ArgoCD:
+- **platform** — Triton, Prometheus, Grafana, MLflow
+- **staging** — Mealie staging environment
+- **canary** — Mealie canary environment
+- **production** — Mealie production environment
+- **workflows-stack** — Argo Workflows
+- **workflows-jobs** — MLflow watcher CronWorkflow
+
+ArgoCD will keep all environments in sync with Git automatically. Verify:
+
+    kubectl get applications -n argocd
 
 ---
 
