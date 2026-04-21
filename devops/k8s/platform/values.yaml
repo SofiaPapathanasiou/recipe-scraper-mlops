@@ -1,6 +1,7 @@
 data:
   driftMonitor:
     enabled: false
+    existingClaim: ''
     resources:
       limits:
         cpu: 500m
@@ -17,11 +18,15 @@ data:
     mountPath: /data
   persistence:
     accessMode: ReadWriteOnce
+    claimName: data-pvc
     enabled: true
     size: 10Gi
     storageClass: ''
   trainingQuality:
     enabled: false
+    existingClaim: data-pvc-gpu
+    nodeSelector:
+      kubernetes.io/hostname: gpu-node
     resources:
       limits:
         cpu: 500m
@@ -30,6 +35,10 @@ data:
         cpu: 100m
         memory: 256Mi
     schedule: 0 0 * * 1,4
+    tolerations:
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      operator: Exists
 grafana:
   adminPassword: admin
   enabled: true
@@ -119,6 +128,7 @@ trainingJob:
   annotations: {}
   backoffLimit: 0
   enabled: false
+  description: Fallback single-pod Kubernetes Job for smoke tests; prefer manual and scheduled Argo Workflows for real training runs.
   env:
     checkpointDir: /data/checkpoints/recipe-correction
     dataDir: /data
@@ -157,6 +167,7 @@ trainingJob:
       memory: 2Gi
       nvidia.com/gpu: 1
   storage:
+    claimName: data-pvc-gpu
     checkpointMountPath: /data/checkpoints
     datasetMountPath: /data
     enabled: true
@@ -168,7 +179,7 @@ trainingJob:
     operator: Exists
   ttlSecondsAfterFinished: 86400
 triton:
-  enabled: true
+  enabled: false
   image:
     pullPolicy: IfNotPresent
     repository: graceritamcgrath/triton-custom

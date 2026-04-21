@@ -26,6 +26,10 @@ and applied through a dedicated Argo CD app.
 Training workflow resources live under
 [`devops/workflows`](/home/cc/recipe-scraper-mlops/devops/workflows/README.md:1).
 
+Manual model training should be launched from the Argo Workflows dashboard UI
+using the `recipe-model-training` template. The Helm `trainingJob` remains in
+the platform chart only as a simple smoke-test or fallback batch job.
+
 ## Team
 - **Training:** Yathin Reddy Duvuru
 - **Serving:** Grace McGrath

@@ -10,6 +10,14 @@ spec:
     spec:
       template:
         spec:
+{{- with .Values.data.trainingQuality.nodeSelector }}
+          nodeSelector:
+{{ toYaml . | indent 12 }}
+{{- end }}
+{{- with .Values.data.trainingQuality.tolerations }}
+          tolerations:
+{{ toYaml . | indent 12 }}
+{{- end }}
           restartPolicy: OnFailure
           containers:
             - name: training-quality
@@ -33,7 +41,7 @@ spec:
             - name: data
               {{- if .Values.data.persistence.enabled }}
               persistentVolumeClaim:
-                claimName: data-pvc
+                claimName: {{ .Values.data.trainingQuality.existingClaim | default .Values.data.persistence.claimName }}
               {{- else }}
               emptyDir: {}
               {{- end }}
