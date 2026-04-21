@@ -1,5 +1,0 @@
-compute_environment: LOCAL_MACHINE
-distributed_type: MULTI_GPU
-num_processes: 1
-mixed_precision: fp16
-dynamo_backend: "no"
