@@ -30,9 +30,9 @@ torch-cpu = [
     "torchaudio==2.11.0; sys_platform == 'darwin'",
 ]
 torch-gpu = [
-    "torch==2.5.1+cu121",
-    "torchvision==0.20.1+cu121",
-    "torchaudio==2.5.1+cu121",
+    "torch==2.5.1+cu124",
+    "torchvision==0.20.1+cu124",
+    "torchaudio==2.5.1+cu124",
 ]
 
 [dependency-groups]
@@ -56,15 +56,15 @@ conflicts = [
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cpu", extra = "torch-cpu" },
-    { index = "pytorch-cu121", extra = "torch-gpu" },
+    { index = "pytorch-cu124", extra = "torch-gpu" },
 ]
 torchvision = [
     { index = "pytorch-cpu", extra = "torch-cpu" },
-    { index = "pytorch-cu121", extra = "torch-gpu" },
+    { index = "pytorch-cu124", extra = "torch-gpu" },
 ]
 torchaudio = [
     { index = "pytorch-cpu", extra = "torch-cpu" },
-    { index = "pytorch-cu121", extra = "torch-gpu" },
+    { index = "pytorch-cu124", extra = "torch-gpu" },
 ]
 
 [[tool.uv.index]]
@@ -75,4 +75,9 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu121"
 url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true

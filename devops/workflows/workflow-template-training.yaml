@@ -169,6 +169,19 @@ spec:
         annotations:
           recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default; it will remain Pending while Triton is using the only cluster GPU."
       podSpecPatch: |
+        containers:
+          - name: resource-monitor
+            image: nvidia/cuda:12.4.1-base-ubuntu22.04 # Needs nvidia-smi binaries
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                while true; do
+                  echo "--- SYSTEM MEMORY ---"
+                  free -m
+                  echo "--- GPU STATUS ---"
+                  nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv,noheader,nounits
+                  sleep 10
+                done
         runtimeClassName: nvidia
         nodeSelector:
           kubernetes.io/hostname: gpu-node
@@ -225,11 +238,11 @@ spec:
         resources:
           requests:
             cpu: "500m"
-            memory: "16Gi"
+            memory: "32Gi"
             ephemeral-storage: "2Gi"
             nvidia.com/gpu: "1"
           limits:
             cpu: "4"
-            memory: "64Gi"
+            memory: "128Gi"
             ephemeral-storage: "8Gi"
             nvidia.com/gpu: "1"

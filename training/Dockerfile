@@ -68,7 +68,7 @@ COPY --chown=trainer:trainer . .
 # Keep defaults consistent with dev image
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    TOKENIZERS_PARALLELISM=false \
+    TOKENIZERS_PARALLELISM=false \sudo journalctl -u kubelet -f
     XDG_CACHE_HOME=/tmp/.cache \
     HF_HOME=/tmp/huggingface \
     HUGGINGFACE_HUB_CACHE=/tmp/huggingface/hub \
