@@ -5,6 +5,7 @@ metadata:
   namespace: default
 spec:
   restartPolicy: Never
+  runtimeClassName: nvidia
   tolerations:
   - key: nvidia.com/gpu
     operator: Exists
@@ -17,7 +18,7 @@ spec:
     command:
     - /bin/bash
     - -lc
-    - ls -l /dev/nvidia* && echo GPU_VISIBLE=$NVIDIA_VISIBLE_DEVICES
+    - nvidia-smi && echo GPU_VISIBLE=$NVIDIA_VISIBLE_DEVICES
     resources:
       limits:
         nvidia.com/gpu: 1

@@ -568,17 +568,19 @@ def resolve_hf_cache_dir(cfg: dict[str, Any]) -> Path:
 
 
 def ensure_hf_cache_env(cache_dir: Path) -> None:
-    hub_dir = cache_dir / "hub"
     datasets_dir = cache_dir / "datasets"
     asset_dir = cache_dir / "assets"
-    for directory in (cache_dir, hub_dir, datasets_dir, asset_dir):
+    for directory in (cache_dir, datasets_dir, asset_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    os.environ.setdefault("HF_HOME", str(cache_dir))
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hub_dir))
-    os.environ.setdefault("TRANSFORMERS_CACHE", str(hub_dir))
-    os.environ.setdefault("HF_DATASETS_CACHE", str(datasets_dir))
-    os.environ.setdefault("HF_ASSETS_CACHE", str(asset_dir))
+    # Always point runtime caches at the resolved training cache dir so
+    # PVC-backed workflow runs reuse the warmed model cache instead of
+    # falling back to image-default /tmp cache locations.
+    os.environ["HF_HOME"] = str(cache_dir)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(cache_dir)
+    os.environ["TRANSFORMERS_CACHE"] = str(cache_dir)
+    os.environ["HF_DATASETS_CACHE"] = str(datasets_dir)
+    os.environ["HF_ASSETS_CACHE"] = str(asset_dir)
 
 
 def resolve_model_source(cfg: dict[str, Any]) -> str:

@@ -35,6 +35,9 @@ spec:
 {{ toYaml . | indent 8 }}
 {{- end }}
     spec:
+{{- with .Values.trainingJob.runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+{{- end }}
 {{- with .Values.trainingJob.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}

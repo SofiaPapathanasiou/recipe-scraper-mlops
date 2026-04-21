@@ -101,6 +101,7 @@
   become: yes
   vars:
     gpu_plugin_manifest: /tmp/nvidia-gpu-device-plugin.yaml
+    gpu_runtimeclass_manifest: /tmp/nvidia-runtimeclass.yaml
     gpu_smoke_manifest: /tmp/gpu-smoke-pod.yaml
   tasks:
     - name: Copy NVIDIA device plugin manifest
@@ -130,6 +131,22 @@
           - daemonset/nvidia-gpu-device-plugin
           - --timeout=180s
       changed_when: false
+      when: "'gpu-node' in groups['all']"
+
+    - name: Copy NVIDIA RuntimeClass manifest
+      ansible.builtin.copy:
+        src: files/nvidia-runtimeclass.yaml
+        dest: "{{ gpu_runtimeclass_manifest }}"
+        mode: "0644"
+      when: "'gpu-node' in groups['all']"
+
+    - name: Apply NVIDIA RuntimeClass manifest
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ gpu_runtimeclass_manifest }}"
       when: "'gpu-node' in groups['all']"
 
     - name: Copy GPU smoke test manifest

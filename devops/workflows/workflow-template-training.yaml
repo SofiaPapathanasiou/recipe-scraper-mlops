@@ -169,6 +169,7 @@ spec:
         annotations:
           recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default; it will remain Pending while Triton is using the only cluster GPU."
       podSpecPatch: |
+        runtimeClassName: nvidia
         nodeSelector:
           kubernetes.io/hostname: gpu-node
         tolerations:
@@ -200,6 +201,16 @@ spec:
             value: "{{inputs.parameters.hf-cache-dir}}"
           - name: HF_CACHE_DIR
             value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: HF_HOME
+            value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: HUGGINGFACE_HUB_CACHE
+            value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: TRANSFORMERS_CACHE
+            value: "{{inputs.parameters.hf-cache-dir}}"
+          - name: HF_DATASETS_CACHE
+            value: "{{inputs.parameters.hf-cache-dir}}/datasets"
+          - name: HF_ASSETS_CACHE
+            value: "{{inputs.parameters.hf-cache-dir}}/assets"
           - name: NUM_PROCESSES
             value: "{{inputs.parameters.num-processes}}"
           - name: TRAIN_EXTRA_ARGS
@@ -215,8 +226,10 @@ spec:
           requests:
             cpu: "500m"
             memory: "2Gi"
+            ephemeral-storage: "2Gi"
             nvidia.com/gpu: "1"
           limits:
             cpu: "2"
-            memory: "6Gi"
+            memory: "12Gi"
+            ephemeral-storage: "8Gi"
             nvidia.com/gpu: "1"

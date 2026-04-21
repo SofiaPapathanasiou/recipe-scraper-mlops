@@ -38,3 +38,15 @@ containerd_registries_mirrors:
       - host: http://192.168.1.11:5000
         capabilities: ["pull", "resolve"]
         skip_verify: true
+
+# Configure an explicit NVIDIA runtime for GPU workloads on containerd-backed nodes.
+# Pods opt into this via runtimeClassName: nvidia instead of changing the node-wide
+# default runtime for every container on gpu-node.
+containerd_additional_runtimes:
+  - name: nvidia
+    type: io.containerd.runc.v2
+    engine: ""
+    root: ""
+    options:
+      BinaryName: /usr/bin/nvidia-container-runtime
+      SystemdCgroup: false

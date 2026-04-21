@@ -155,15 +155,18 @@ trainingJob:
     prewarmEnabled: false
   nodeSelector:
     kubernetes.io/hostname: gpu-node
+  runtimeClassName: nvidia
   podAnnotations: {}
   podLabels: {}
   resources:
     limits:
       cpu: '2'
-      memory: 6Gi
+      ephemeral-storage: 8Gi
+      memory: 12Gi
       nvidia.com/gpu: 1
     requests:
       cpu: 500m
+      ephemeral-storage: 2Gi
       memory: 2Gi
       nvidia.com/gpu: 1
   storage:
