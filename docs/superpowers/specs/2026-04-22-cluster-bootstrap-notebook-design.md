@@ -2,20 +2,33 @@
 
 ## Goal
 
-Create a single runnable Bash notebook at the repository root that brings the platform up from scratch when executed from the `node1` control host. The notebook should guide an operator through provisioning, cluster bootstrap, Argo CD setup, and application deployment using the automation already present in this repository.
+Create two runnable Bash notebooks at the repository root:
+
+1. A Terraform provisioning notebook that can be run by a third party before the cluster exists
+2. A cluster bootstrap notebook that is run from the `node1` control host after infrastructure is available
+
+Together, the notebooks should guide an operator through provisioning, cluster bootstrap, Argo CD setup, and application deployment using the automation already present in this repository.
 
 ## Scope
 
-The notebook will cover these stages in order:
+The deliverable will be split into two notebooks.
 
-1. Provision infrastructure with Terraform in `devops/tf/kvm`
+Notebook 1 will cover:
+
+1. Chameleon credential prerequisite guidance
+2. Provision infrastructure with Terraform in `devops/tf/kvm`
+3. Output-oriented handoff instructions for accessing `node1`
+
+Notebook 2 will cover:
+
+1. SSH-to-`node1` and repo clone prerequisites
 2. Verify Ansible connectivity with `devops/ansible/general/hello_host.yml`
 3. Prepare nodes with `devops/ansible/pre_k8s/pre_k8s_configure.yml`
 4. Create the Kubernetes cluster with Kubespray `cluster.yml`
 5. Configure post-cluster tooling with `devops/ansible/post_k8s/post_k8s_configure.yml`
 6. Bootstrap Argo CD applications with `devops/ansible/argocd/argocd_bootstrap_apps.yml`
 
-The notebook will also include prerequisite checks, operator inputs, validation commands after each major phase, and short recovery notes for common rerun scenarios.
+Both notebooks will include prerequisite checks, operator inputs, validation commands after each major phase, and short recovery notes for common rerun scenarios.
 
 ## Non-Goals
 
@@ -26,30 +39,34 @@ The notebook will also include prerequisite checks, operator inputs, validation 
 
 ## Execution Assumptions
 
-- The notebook runs on `node1`, which is the control host and public entrypoint.
-- The repository is available on `node1` at a stable repo-root path.
-- The operator has shell access, the SSH key referenced by the inventories, and a valid `~/.config/openstack/clouds.yaml`.
-- Terraform, Ansible, `kubectl`, and required supporting CLIs are either already installed or can be checked before execution.
+- Notebook 1 runs from a machine that can reach Chameleon Cloud APIs and has Terraform installed.
+- The operator running Notebook 1 has Chameleon application credentials in `clouds.yaml` form and places them in `~/.config/openstack/clouds.yaml`.
+- Notebook 2 runs on `node1`, which is the control host and public entrypoint after provisioning completes.
+- Before running Notebook 2, the operator SSHs into `node1` and clones this repository locally.
+- The operator has shell access, the SSH key referenced by the inventories, and the CLIs needed for the relevant notebook.
 - Kubespray is available in the environment expected by this repo, and the operator can invoke its `cluster.yml` playbook from `node1`.
 
 ## Notebook Format
 
 - File location: repo root
-- File type: Jupyter notebook with a Bash kernel
+- File type: Jupyter notebooks with a Bash kernel
+- Deliverables:
+  - Terraform provisioning notebook
+  - `node1` cluster bootstrap notebook
 - Cell mix:
   - Markdown cells for context, warnings, expected outcomes, and rerun notes
   - Bash cells for executable steps
 - Bash cells should begin with `set -euo pipefail` unless a cell intentionally captures failures for diagnostics
 
-## Notebook Structure
+## Notebook 1: Terraform Provisioning
 
 ### 1. Title and outcome
 
 Explain:
 
-- what the notebook provisions
-- that it is intended for clean cluster bring-up from `node1`
-- the high-level stage order
+- that this notebook is run before `node1` is accessible
+- what infrastructure it provisions in Chameleon
+- that successful completion produces a `node1` entrypoint for the remaining setup
 - the expected manual supervision points
 
 ### 2. Prerequisites and operator inputs
@@ -70,10 +87,16 @@ Provide one early parameter cell that defines reusable variables such as:
 
 Add checks for:
 
-- running on `node1`
 - required commands present
 - `clouds.yaml` present
-- expected inventory files present
+- expected Terraform files present
+
+Add a dedicated markdown cell that explains:
+
+- the operator must obtain Chameleon Cloud application credentials
+- those credentials must be available as a `clouds.yaml`
+- the file should be placed at `~/.config/openstack/clouds.yaml`
+- Terraform provisioning cannot proceed without that file
 
 ### 3. Terraform phase
 
@@ -88,13 +111,49 @@ Include cells for:
 Validation:
 
 - confirm apply success
-- remind operator that Ansible and Kubespray inventory IPs must match provisioned hosts
+- show outputs relevant to accessing `node1`
 
 Recovery note:
 
 - mention partial apply cleanup guidance already documented in `devops/tf/kvm/README.md`
 
-### 4. Ansible connectivity phase
+### 4. Handoff to node1
+
+Include a markdown section that tells the operator to:
+
+- SSH into `node1`
+- clone this repository onto `node1`
+- switch to the repo root there
+- continue with Notebook 2 for all remaining steps
+
+## Notebook 2: node1 Cluster Bootstrap
+
+### 1. Title and outcome
+
+Explain:
+
+- that this notebook must be run from inside `node1`
+- that Terraform provisioning must already be complete
+- that the repo should already be cloned on `node1`
+- the remaining cluster/bootstrap stage order
+
+### 2. Prerequisites and operator inputs
+
+Provide one early parameter cell that defines reusable variables such as:
+
+- `REPO_ROOT`
+- `ANSIBLE_DIR`
+- `KUBESPRAY_DIR`
+- `KUBESPRAY_INVENTORY`
+
+Add checks for:
+
+- running on `node1`
+- required commands present
+- expected inventory files present
+- repository path exists locally on `node1`
+
+### 3. Ansible connectivity phase
 
 Run:
 
@@ -104,7 +163,7 @@ Validation:
 
 - all hosts return hostnames successfully
 
-### 5. Pre-K8s preparation phase
+### 4. Pre-K8s preparation phase
 
 Run:
 
@@ -115,7 +174,7 @@ Validation:
 - playbook completes without unreachable hosts
 - optional follow-up ad hoc checks for package manager and networking state if needed
 
-### 6. Kubespray cluster creation phase
+### 5. Kubespray cluster creation phase
 
 Run Kubespray against `devops/ansible/k8s/inventory/mycluster/hosts.yaml` using the repo’s chosen invocation path for `cluster.yml`.
 
@@ -125,7 +184,7 @@ Validation:
 - `kubectl get pods -A`
 - note that `post_k8s` later copies `admin.conf` into `/home/cc/.kube/config`, so pre-validation may need explicit kubeconfig or root access depending on cluster state
 
-### 7. Post-K8s configuration phase
+### 6. Post-K8s configuration phase
 
 Run:
 
@@ -142,7 +201,7 @@ Operator note:
 
 - highlight that this playbook reveals the initial Argo CD admin password in output
 
-### 8. Argo CD bootstrap apps phase
+### 7. Argo CD bootstrap apps phase
 
 Run:
 
@@ -154,7 +213,7 @@ Validation:
 - `kubectl get pods -n argocd`
 - optional sync/health inspection using `argocd` CLI if login is configured
 
-### 9. Final verification and next checks
+### 8. Final verification and next checks
 
 Summarize:
 
@@ -169,9 +228,9 @@ Include watch commands such as:
 
 ## Design Choices
 
-### Single notebook instead of split notebooks
+### Split notebooks instead of a single notebook
 
-This workflow is sequential and operator-driven. A single notebook reduces context switching and makes it easier to recover from partial progress.
+Provisioning happens before `node1` exists, while the remaining automation is intended to run from inside `node1`. Splitting the runbook along that boundary makes the execution context explicit and avoids mixing off-cluster and on-cluster assumptions in one notebook.
 
 ### Parameterized commands instead of hard-coded values
 
@@ -184,9 +243,11 @@ The notebook should call existing Terraform and Ansible entrypoints directly rat
 ## Risks and Mitigations
 
 - Inventory drift after Terraform apply
-  - Mitigation: add an explicit checkpoint reminding the operator to confirm host IPs before Ansible and Kubespray steps.
+  - Mitigation: add an explicit checkpoint in the `node1` notebook reminding the operator to confirm host IPs before Ansible and Kubespray steps.
+- Missing or invalid Chameleon credentials
+  - Mitigation: add an early notebook cell explaining the `clouds.yaml` requirement and fail fast if `~/.config/openstack/clouds.yaml` is missing.
 - Missing Bash kernel on `node1`
-  - Mitigation: include a prerequisite note that the notebook requires a Bash-capable Jupyter kernel.
+  - Mitigation: include a prerequisite note that both notebooks require a Bash-capable Jupyter kernel in their execution environment.
 - Long-running or flaky infrastructure steps
   - Mitigation: keep phases separated into rerunnable cells and add short recovery notes instead of one monolithic cell.
 - Secret exposure in notebook output
@@ -196,8 +257,9 @@ The notebook should call existing Terraform and Ansible entrypoints directly rat
 
 Implementation will verify:
 
-- notebook JSON is valid
-- notebook opens as a root-level `.ipynb`
+- both notebook JSON files are valid
+- both notebooks open as root-level `.ipynb` files
 - cells reference real repository paths and playbooks
 - command order matches the intended bring-up flow
-- no stage assumes local-laptop execution
+- Terraform notebook does not assume `node1` access
+- bootstrap notebook assumes execution from `node1`
