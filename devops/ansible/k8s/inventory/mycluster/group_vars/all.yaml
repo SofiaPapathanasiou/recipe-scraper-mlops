@@ -17,14 +17,15 @@ argocd_enabled: true
 # node1 remains the single external control-plane entrypoint for now.
 kube_vip_enabled: false
 
-# Enable GPU node discovery and scheduling on gpu-node.
+# Enable GPU node discovery and scheduling on gpu-node1 and gpu-node2.
 node_feature_discovery_enabled: true
 node_feature_discovery_master_config:
   extraLabelNs:
     - nvidia.com
 nvidia_accelerator_enabled: true
 nvidia_gpu_nodes:
-  - gpu-node
+  - gpu-node1
+  - gpu-node2
 
 # Lower eviction threshold to allow large images
 kubelet_eviction_hard:
@@ -33,6 +34,11 @@ kubelet_eviction_hard:
 # Local registry currently serves plain HTTP on port 5000.
 # Mirror configuration keeps containerd from forcing HTTPS for in-cluster images.
 containerd_registries_mirrors:
+  - prefix: node1:5000
+    mirrors:
+      - host: http://node1:5000
+        capabilities: ["pull", "resolve"]
+        skip_verify: true
   - prefix: 192.168.1.11:5000
     mirrors:
       - host: http://192.168.1.11:5000
@@ -41,7 +47,7 @@ containerd_registries_mirrors:
 
 # Configure an explicit NVIDIA runtime for GPU workloads on containerd-backed nodes.
 # Pods opt into this via runtimeClassName: nvidia instead of changing the node-wide
-# default runtime for every container on gpu-node.
+# default runtime for every container on GPU nodes.
 containerd_additional_runtimes:
   - name: nvidia
     type: io.containerd.runc.v2

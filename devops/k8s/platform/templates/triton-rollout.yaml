@@ -15,8 +15,10 @@ spec:
       labels:
         app: recipe-triton
     spec:
+{{- with .Values.triton.nodeSelector }}
       nodeSelector:
-        kubernetes.io/hostname: gpu-node
+{{ toYaml . | indent 8 }}
+{{- end }}
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

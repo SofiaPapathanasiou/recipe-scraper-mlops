@@ -18,6 +18,16 @@ all:
     node5:
       ansible_host: 192.168.1.15
       ansible_user: cc
-    gpu-node:
-      ansible_host: 192.168.1.41
+      mlflow_postgres_volume_enabled: true
+      mlflow_postgres_volume_device: /dev/vdb
+      mlflow_postgres_volume_partition_number: "1"
+      mlflow_postgres_volume_mount_point: /mnt/mlflow_persist
+      mlflow_postgres_volume_data_dir: postgres_data
+      mlflow_postgres_volume_owner_uid: "999"
+      mlflow_postgres_volume_owner_gid: "999"
+    gpu-node1:
+      ansible_host: 192.168.1.16
+      ansible_user: cc
+    gpu-node2:
+      ansible_host: 192.168.1.17
       ansible_user: cc

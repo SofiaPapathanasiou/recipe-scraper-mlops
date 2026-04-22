@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 - name: Submit manual training workflow from the repo
   hosts: node1
   become: yes
@@ -10,43 +9,19 @@
 
   tasks:
     - name: Clone or update recipe-scraper-mlops repo
-=======
-- name: Build Training Container Image Workflow
-  hosts: node1
-  become: yes
-  vars:
-    repo_url: https://github.com/teaching-on-testbeds/gourmetgram-iac.git
-    repo_dest: /tmp/gourmetgram-iac
-    workflow_file: workflows/build-training-initial-buildkit.yaml
-    workflow_name: build-training-initial-buildkit
-    argo_namespace: argo
-    branch: mlops  # Default branch (can be overridden with -e branch=mlops-bad-arch)
-
-  tasks:
-    - name: Clone or update gourmetgram-iac repo
->>>>>>> origin/main
       git:
         repo: "{{ repo_url }}"
         dest: "{{ repo_dest }}"
         version: main
 
-<<<<<<< HEAD
     - name: Submit manual workflow
       command: kubectl create -f {{ repo_dest }}/{{ workflow_file }}
-=======
-    - name: Submit Argo Workflow with branch parameter
-      shell: |
-        kubectl -n {{ argo_namespace }} create -f - <<EOF
-        $(cat {{ repo_dest }}/{{ workflow_file }} | sed 's/value: mlops/value: {{ branch }}/')
-        EOF
->>>>>>> origin/main
       register: workflow_submit
 
     - name: Extract Workflow Name
       set_fact:
         workflow_name_generated: "{{ workflow_submit.stdout.split(' ')[0].split('/')[1] }}"
 
-<<<<<<< HEAD
     - name: Wait for workflow to reach a terminal condition
       shell: |
         kubectl -n {{ workflow_namespace }} wait --for=condition=Completed workflow/{{ workflow_name_generated }} --timeout=600s
@@ -56,33 +31,13 @@
     - name: Get final workflow result
       shell: |
         kubectl -n {{ workflow_namespace }} get workflow {{ workflow_name_generated }} -o jsonpath="{.status.phase}"
-=======
-    - name: Wait for workflow to complete (success or fail)
-      shell: |
-        kubectl -n {{ argo_namespace }} wait --for=condition=Completed workflow/{{ workflow_name_generated }} --timeout=600s
-      register: workflow_status
-      failed_when: workflow_status.rc != 0
-
-    - name: Get final workflow result
-      shell: |
-        kubectl -n {{ argo_namespace }} get workflow {{ workflow_name_generated }} -o jsonpath="{.status.phase}"
->>>>>>> origin/main
       register: workflow_phase
 
     - name: Display workflow phase
       debug:
-<<<<<<< HEAD
         msg: "Workflow {{ workflow_name_generated }} finished with status: {{ workflow_phase.stdout }}"
 
     - name: Show note for pending GPU-bound workflows
       debug:
-        msg: "A Pending phase is expected while Triton holds the only GPU on gpu-node."
+        msg: "A Pending phase usually indicates gpu-node1 is busy; Triton is isolated on gpu-node2."
       when: workflow_phase.stdout == "Pending"
-=======
-        msg: "Workflow {{ workflow_name_generated }} (branch: {{ branch }}) finished with status: {{ workflow_phase.stdout }}"
-
-    - name: Fail if workflow did not succeed
-      fail:
-        msg: "Workflow {{ workflow_name_generated }} failed with status: {{ workflow_phase.stdout }}"
-      when: workflow_phase.stdout != "Succeeded"
->>>>>>> origin/main

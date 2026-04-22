@@ -14,4 +14,11 @@ data "openstack_networking_secgroup_v2" "allow_http_80" {
   name = "allow-http-80"
 }
 
+data "openstack_networking_secgroup_v2" "allow_subnet_traffic_proj22" {
+  name = "allow-subnet-traffic-proj22"
+}
+
+data "openstack_networking_secgroup_v2" "allow_nat_proj22" {
+  name = "allow-nat-proj22"
+}
 

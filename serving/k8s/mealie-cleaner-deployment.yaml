@@ -47,4 +47,4 @@ spec:
       volumes:
       - name: data
         persistentVolumeClaim:
-          claimName: data-pvc
+          claimName: data-pvc-gpu
