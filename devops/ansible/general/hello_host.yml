@@ -3,12 +3,72 @@
   hosts: all
   gather_facts: no
 
+  vars:
+    ssh_private_key_path: "{{ ansible_ssh_private_key_file }}"
+    ssh_public_key_path: "{{ ansible_ssh_private_key_file }}.pub"
+    ssh_remote_private_key_path: "{{ ansible_user_dir }}/.ssh/id_rsa_chameleon_ansible"
+    ssh_remote_public_key_path: "{{ ansible_user_dir }}/.ssh/id_rsa_chameleon_ansible.pub"
+
   tasks:
+    - name: Read controller public key
+      ansible.builtin.set_fact:
+        chameleon_public_key: "{{ lookup('file', ssh_public_key_path) | trim }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Read controller private key
+      ansible.builtin.set_fact:
+        chameleon_private_key: "{{ lookup('file', ssh_private_key_path) }}"
+      run_once: true
+      delegate_to: localhost
+      no_log: true
+
+    - name: Create ~/.ssh directory
+      ansible.builtin.file:
+        path: "{{ ansible_user_dir }}/.ssh"
+        state: directory
+        mode: "0700"
+
+    - name: Install shared private key on each node
+      ansible.builtin.copy:
+        content: "{{ hostvars[groups['all'][0]].chameleon_private_key }}"
+        dest: "{{ ssh_remote_private_key_path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Install shared public key on each node
+      ansible.builtin.copy:
+        content: "{{ hostvars[groups['all'][0]].chameleon_public_key }}\n"
+        dest: "{{ ssh_remote_public_key_path }}"
+        mode: "0644"
+
+    - name: Authorize shared key for login between nodes
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ hostvars[groups['all'][0]].chameleon_public_key }}"
+
+    - name: Ensure SSH config contains inventory hosts
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_user_dir }}/.ssh/config"
+        create: true
+        mode: "0600"
+        marker: "# {mark} ANSIBLE MANAGED CHAMELEON HOSTS"
+        block: |
+          {% for host in groups['all'] %}
+          Host {{ host }}
+            HostName {{ hostvars[host].ansible_host | default(host) }}
+            User {{ hostvars[host].ansible_user | default(ansible_user) }}
+            IdentityFile {{ ssh_remote_private_key_path }}
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          {% endfor %}
+
     - name: Run hostname command
-      command: hostname
+      ansible.builtin.command: hostname
       register: hostname_output
 
     - name: Show hostname output
-      debug:
+      ansible.builtin.debug:
         msg: "The hostname of {{ inventory_hostname }} is {{ hostname_output.stdout }}"
-
