@@ -51,14 +51,9 @@ docker compose --profile training build training
 Build and publish the training image to the cluster-local registry:
 
 ```bash
-# required once per build host because the registry serves plain HTTP
-sudo mkdir -p /etc/docker
-cat <<'EOF' | sudo tee /etc/docker/daemon.json
-{
-  "insecure-registries": ["192.168.1.11:5000"]
-}
-EOF
-sudo systemctl restart docker
+# cluster nodes get this automatically via devops/ansible/pre_k8s/pre_k8s_configure.yml
+# if you build from a non-cluster machine, add both registry aliases:
+#   "insecure-registries": ["node1:5000", "192.168.1.11:5000"]
 
 docker build -t 192.168.1.11:5000/recipe-scraper-training:latest -f training/Dockerfile training
 docker push 192.168.1.11:5000/recipe-scraper-training:latest

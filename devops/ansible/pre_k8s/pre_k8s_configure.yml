@@ -84,6 +84,72 @@
         fail_msg: Ubuntu apt mirror was not updated in /etc/apt/sources.list.d/ubuntu.sources.
       when: ansible_facts["distribution"] == "Ubuntu"
 
+    - name: Ensure node1 host alias exists on every node
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^\S+\s+node1(\s|$)'
+        line: "{{ node1_private_ip }} node1"
+        state: present
+
+    - name: Check whether Docker CLI is installed
+      ansible.builtin.command: command -v docker
+      register: docker_cli_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure Docker trusts node1 registry aliases when Docker is installed
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        import os
+
+        daemon_json_path = "/etc/docker/daemon.json"
+        desired_registries = ["node1:5000", "{{ node1_private_ip }}:5000"]
+
+        daemon_cfg = {}
+        if os.path.exists(daemon_json_path):
+          with open(daemon_json_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            if raw:
+              daemon_cfg = json.loads(raw)
+
+        insecure_registries = daemon_cfg.get("insecure-registries", [])
+        if not isinstance(insecure_registries, list):
+          raise SystemExit("Expected 'insecure-registries' to be a list in /etc/docker/daemon.json")
+
+        changed = False
+        for registry in desired_registries:
+          if registry not in insecure_registries:
+            insecure_registries.append(registry)
+            changed = True
+
+        if daemon_cfg.get("insecure-registries") != insecure_registries:
+          daemon_cfg["insecure-registries"] = insecure_registries
+          changed = True
+
+        os.makedirs("/etc/docker", exist_ok=True)
+        if changed or not os.path.exists(daemon_json_path):
+          with open(daemon_json_path, "w", encoding="utf-8") as f:
+            json.dump(daemon_cfg, f, indent=2, sort_keys=True)
+            f.write("\n")
+          print("changed")
+        else:
+          print("unchanged")
+        PY
+      args:
+        executable: /bin/bash
+      register: docker_registry_config
+      changed_when: "'changed' in docker_registry_config.stdout"
+      when: docker_cli_installed.rc == 0
+
+    - name: Restart Docker when node1 registry aliases were added
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when:
+        - docker_cli_installed.rc == 0
+        - docker_registry_config.changed
+
     - name: Stop background apt maintenance services on Debian hosts
       ansible.builtin.shell: |
         systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer || true
