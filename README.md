@@ -27,7 +27,7 @@ This is a course project for *Machine Learning Systems Engineering & Operations 
 
 ## Recreate the environment (repo-root notebooks)
 
-Use the two repo-root setup notebooks in order to rebuild infrastructure and cluster state end-to-end.
+Use the repo-root setup notebooks in order to rebuild infrastructure and cluster state end-to-end.
 
 1. From your local machine, run `01_terraform_provisioning.ipynb` from the repo root.
 2. Complete Terraform validation in the notebook (`plan`/`apply` checks and expected outputs).
@@ -38,6 +38,12 @@ Use the two repo-root setup notebooks in order to rebuild infrastructure and clu
    - Kubespray cluster creation (`cluster.yml`)
    - Post-K8s configuration (`post_k8s_configure.yml`)
    - Argo CD bootstrap apps (`argocd_bootstrap_apps.yml`)
+
+5. (Optional) Submit a one-off manual training run via the Argo CLI using `03_manual_training_workflow_cli.ipynb`.
+   - Purpose: wraps `argo submit` for `devops/workflows/manual-training-workflow.yaml` with a single place to override workflow parameters.
+   - Prereqs: `argo` + `kubectl` installed and pointed at the cluster; the `recipe-model-training` `WorkflowTemplate` exists in the `recipe-scraper-platform` namespace.
+   - Common overrides: `TRAINING_IMAGE` (cluster-local training image), `TRAIN_JSONL_PATH` / `EVAL_JSONL_PATH`, `NUM_PROCESSES`, `TRAIN_EXTRA_ARGS`, `MLFLOW_TRACKING_URI`.
+   - If you prefer the UI: manual training can also be launched from the Argo Workflows dashboard using the `recipe-model-training` template.
 
 ### Required prerequisite before `pre_k8s`
 
