@@ -31,3 +31,6 @@ all:
     gpu-node2:
       ansible_host: 192.168.1.17
       ansible_user: cc
+    gpu-node-chi:
+      ansible_host: 192.168.1.18
+      ansible_user: cc
