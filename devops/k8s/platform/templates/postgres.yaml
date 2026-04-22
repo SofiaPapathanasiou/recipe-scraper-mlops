@@ -1,4 +1,32 @@
-{{- if .Values.postgres.persistence.enabled }}
+{{- if and .Values.postgres.persistence.enabled .Values.postgres.persistence.hostLocal.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.postgres.persistence.hostLocal.pvName }}
+spec:
+  capacity:
+    storage: {{ .Values.postgres.persistence.size }}
+  accessModes:
+    - {{ .Values.postgres.persistence.accessMode }}
+  persistentVolumeReclaimPolicy: {{ .Values.postgres.persistence.hostLocal.reclaimPolicy }}
+  {{- if .Values.postgres.persistence.storageClass }}
+  storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+  {{- else }}
+  storageClassName: ""
+  {{- end }}
+  local:
+    path: {{ .Values.postgres.persistence.hostLocal.path | quote }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - {{ .Values.postgres.persistence.hostLocal.nodeHostname | quote }}
+{{- end }}
+{{- if and .Values.postgres.persistence.enabled (not .Values.postgres.persistence.existingClaim) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -11,8 +39,13 @@ spec:
   resources:
     requests:
       storage: {{ .Values.postgres.persistence.size }}
+  {{- if .Values.postgres.persistence.hostLocal.enabled }}
+  volumeName: {{ .Values.postgres.persistence.hostLocal.pvName }}
+  {{- end }}
   {{- if .Values.postgres.persistence.storageClass }}
   storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+  {{- else if .Values.postgres.persistence.hostLocal.enabled }}
+  storageClassName: ""
   {{- end }}
 {{- end }}
 ---
@@ -31,8 +64,10 @@ spec:
       labels:
         app: postgres
     spec:
+      {{- with .Values.postgres.nodeSelector }}
       nodeSelector:
-        kubernetes.io/hostname: node5
+{{ toYaml . | indent 8 }}
+      {{- end }}
       containers:
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
@@ -86,7 +121,11 @@ spec:
         - name: postgres-storage
           {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
+            {{- if .Values.postgres.persistence.existingClaim }}
+            claimName: {{ .Values.postgres.persistence.existingClaim }}
+            {{- else }}
             claimName: postgres-pvc
+            {{- end }}
           {{- else }}
           emptyDir: {}
           {{- end }}

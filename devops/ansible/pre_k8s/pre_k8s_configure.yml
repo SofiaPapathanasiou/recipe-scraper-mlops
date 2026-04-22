@@ -436,3 +436,99 @@
       ansible.builtin.systemd:
         name: systemd-resolved
         state: restarted
+
+- name: Prepare node-local external block volume for MLflow PostgreSQL
+  hosts: node5
+  become: yes
+  tasks:
+    - name: Install the MLflow PostgreSQL volume helper script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/configure-mlflow-postgres-volume.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [[ "{{ mlflow_postgres_volume_enabled | default(false) | bool }}" != "True" ]]; then
+            echo "MLflow PostgreSQL external volume setup disabled; skipping."
+            exit 0
+          fi
+
+          DEVICE="{{ mlflow_postgres_volume_device | default('/dev/vdb') }}"
+          PARTITION="${DEVICE}{{ mlflow_postgres_volume_partition_number | default('1') }}"
+          MOUNT_POINT="{{ mlflow_postgres_volume_mount_point | default('/mnt/mlflow_persist') }}"
+          DATA_DIR="${MOUNT_POINT}/{{ mlflow_postgres_volume_data_dir | default('postgres_data') }}"
+          OWNER_UID="{{ mlflow_postgres_volume_owner_uid | default('999') }}"
+          OWNER_GID="{{ mlflow_postgres_volume_owner_gid | default('999') }}"
+
+          if [[ ! -b "${DEVICE}" ]]; then
+            echo "Expected block device ${DEVICE} is not present."
+            exit 1
+          fi
+
+          if [[ ! -b "${PARTITION}" ]]; then
+            echo "Creating GPT partition table and primary partition on ${DEVICE}."
+            parted -s "${DEVICE}" mklabel gpt
+            parted -s "${DEVICE}" mkpart primary ext4 0% 100%
+            partprobe "${DEVICE}"
+            udevadm settle
+          fi
+
+          if ! blkid "${PARTITION}" >/dev/null 2>&1; then
+            echo "No filesystem found on ${PARTITION}; formatting as ext4."
+            mkfs.ext4 -F "${PARTITION}"
+          else
+            echo "Filesystem already exists on ${PARTITION}; skipping format."
+          fi
+
+          mkdir -p "${MOUNT_POINT}"
+          PARTITION_UUID="$(blkid -s UUID -o value "${PARTITION}")"
+          if [[ -z "${PARTITION_UUID}" ]]; then
+            echo "Unable to read UUID for ${PARTITION}."
+            exit 1
+          fi
+
+          if ! grep -q "UUID=${PARTITION_UUID}[[:space:]]\+${MOUNT_POINT}[[:space:]]" /etc/fstab; then
+            echo "UUID=${PARTITION_UUID} ${MOUNT_POINT} ext4 defaults,nofail 0 2" >> /etc/fstab
+          fi
+
+          if ! mountpoint -q "${MOUNT_POINT}"; then
+            mount "${MOUNT_POINT}"
+          fi
+
+          mkdir -p "${DATA_DIR}"
+          chown -R "${OWNER_UID}:${OWNER_GID}" "${DATA_DIR}"
+
+          echo "MLflow PostgreSQL volume ready at ${DATA_DIR}."
+      when: mlflow_postgres_volume_enabled | default(false) | bool
+
+    - name: Install the MLflow PostgreSQL volume systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/mlflow-postgres-volume.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Configure and mount external volume for MLflow PostgreSQL
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/configure-mlflow-postgres-volume.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      when: mlflow_postgres_volume_enabled | default(false) | bool
+
+    - name: Enable and run the MLflow PostgreSQL volume systemd unit
+      ansible.builtin.systemd:
+        name: mlflow-postgres-volume.service
+        daemon_reload: yes
+        enabled: yes
+        state: restarted
+      when: mlflow_postgres_volume_enabled | default(false) | bool

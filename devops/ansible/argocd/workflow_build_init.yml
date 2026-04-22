@@ -39,5 +39,5 @@
 
     - name: Show note for pending GPU-bound workflows
       debug:
-        msg: "A Pending phase is expected while Triton holds the only GPU on gpu-node."
+        msg: "A Pending phase usually indicates gpu-node1 is busy; Triton is isolated on gpu-node2."
       when: workflow_phase.stdout == "Pending"

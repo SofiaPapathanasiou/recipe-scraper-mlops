@@ -1,4 +1,4 @@
-cle# recipe-scraper-mlops
+# recipe-scraper-mlops
 
 This project implements an end-to-end ML pipeline built around the open-source recipe manager Mealie (https://github.com/mealie-recipes/mealie). We introduce an ML feature that takes scraped recipes from the internet that may contain formatting issues or mistakes and produces neatly formatted and corrected recipes for users to save in their Mealie app.
 
@@ -24,6 +24,24 @@ This is a course project for *Machine Learning Systems Engineering & Operations 
 ## Documentation
 
 - **Serving layer** — setup, deployment, monitoring, and rollback: [serving/README.md](serving/README.md)
+
+## Recreate the environment (repo-root notebooks)
+
+Use the two repo-root setup notebooks in order to rebuild infrastructure and cluster state end-to-end.
+
+1. From your local machine, run `01_terraform_provisioning.ipynb` from the repo root.
+2. Complete Terraform validation in the notebook (`plan`/`apply` checks and expected outputs).
+3. SSH into `node1`, clone this repo there, and `cd` to the repo root on `node1`.
+4. Run `02_node1_cluster_bootstrap.ipynb` on `node1` phase by phase:
+   - Ansible connectivity (`hello_host.yml`)
+   - Pre-K8s preparation (`pre_k8s_configure.yml`)
+   - Kubespray cluster creation (`cluster.yml`)
+   - Post-K8s configuration (`post_k8s_configure.yml`)
+   - Argo CD bootstrap apps (`argocd_bootstrap_apps.yml`)
+
+### Required prerequisite before `pre_k8s`
+
+Before running the `pre_k8s` phase/playbook, ensure the MLflow PostgreSQL persistent volume is mounted and ready on `node5` at `/mnt/mlflow_persist/postgres_data`. This must be in place before `devops/ansible/pre_k8s/pre_k8s_configure.yml` runs.
 
 ## Argo Workflows
 

@@ -171,11 +171,11 @@ spec:
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
       metadata:
         annotations:
-          recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node and expects the GPU-local data PVC by default."
+          recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node1 for training and uses the shared data-pvc-gpu claim by default."
       podSpecPatch: |
         runtimeClassName: nvidia
         nodeSelector:
-          kubernetes.io/hostname: gpu-node
+          kubernetes.io/hostname: gpu-node1
         tolerations:
           - key: nvidia.com/gpu
             operator: Exists

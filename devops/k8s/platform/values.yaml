@@ -17,16 +17,15 @@ data:
       tag: latest
     mountPath: /data
   persistence:
-    accessMode: ReadWriteOnce
-    claimName: data-pvc
+    accessMode: ReadWriteMany
+    claimName: data-pvc-gpu
     enabled: true
     size: 10Gi
     storageClass: ''
   trainingQuality:
     enabled: false
     existingClaim: data-pvc-gpu
-    nodeSelector:
-      kubernetes.io/hostname: gpu-node
+    nodeSelector: {}
     resources:
       limits:
         cpu: 500m
@@ -89,6 +88,8 @@ mlflow:
 namespace:
   create: true
 postgres:
+  nodeSelector:
+    kubernetes.io/hostname: node5
   auth:
     database: mlflowdb
     existingSecret: ''
@@ -101,6 +102,13 @@ postgres:
   persistence:
     accessMode: ReadWriteOnce
     enabled: true
+    existingClaim: ''
+    hostLocal:
+      enabled: true
+      nodeHostname: node5
+      path: /mnt/mlflow_persist/postgres_data
+      pvName: postgres-local-pv
+      reclaimPolicy: Retain
     size: 10Gi
     storageClass: ''
   service:
@@ -154,7 +162,7 @@ trainingJob:
   modelCache:
     prewarmEnabled: false
   nodeSelector:
-    kubernetes.io/hostname: gpu-node
+    kubernetes.io/hostname: gpu-node1
   runtimeClassName: nvidia
   podAnnotations: {}
   podLabels: {}
@@ -183,6 +191,8 @@ trainingJob:
   ttlSecondsAfterFinished: 86400
 triton:
   enabled: false
+  nodeSelector:
+    kubernetes.io/hostname: gpu-node2
   image:
     pullPolicy: IfNotPresent
     repository: graceritamcgrath/triton-custom

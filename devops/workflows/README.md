@@ -20,12 +20,12 @@ Files:
 
 Important current default:
 
-- Training workflows default to `data-pvc-gpu`, the PVC mounted on
-  `gpu-node`, so training pods can access the dataset from the same node where
-  the GPU is scheduled.
-- The `CronWorkflow` is suspended by default because the only cluster GPU is
-  already reserved by Triton on `gpu-node`. Unsuspend it only after GPU
-  capacity or serving allocation changes.
+- Training workflows default to `data-pvc-gpu`, a shared PVC intended to be
+  accessible from pods scheduled on any node.
+- Training workloads are pinned to `gpu-node1`.
+- Triton serving is pinned to `gpu-node2`.
+- The `CronWorkflow` is suspended by default; unsuspend it when you want
+  scheduled retraining active.
 
 GitOps note:
 
