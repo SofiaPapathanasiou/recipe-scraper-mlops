@@ -190,9 +190,9 @@ trainingJob:
     operator: Exists
   ttlSecondsAfterFinished: 86400
 triton:
-  enabled: false
+  enabled: true
   nodeSelector:
-    kubernetes.io/hostname: gpu-node2
+    kubernetes.io/hostname: gpu-node-chi
   image:
     pullPolicy: IfNotPresent
     repository: graceritamcgrath/triton-custom

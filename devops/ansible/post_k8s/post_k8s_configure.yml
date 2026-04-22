@@ -43,7 +43,7 @@
         mode: "0755"
 
     - name: Verify Argo CD CLI installation
-      ansible.builtin.command: argocd version --client
+      ansible.builtin.command: argocd version --client --short
       register: argocd_version
       changed_when: false
 
@@ -82,7 +82,7 @@
         executable: /bin/bash
 
     - name: Verify Argo Workflows CLI installation
-      ansible.builtin.command: argo version --client
+      ansible.builtin.command: argo version
       register: argo_version
       changed_when: false
 
@@ -111,6 +111,8 @@
         apt-get install -y nvidia-container-toolkit
       args:
         executable: /bin/bash
+      async: 300
+      poll: 10
 
     - name: Configure NVIDIA runtime for containerd
       ansible.builtin.command: nvidia-ctk runtime configure --runtime=containerd

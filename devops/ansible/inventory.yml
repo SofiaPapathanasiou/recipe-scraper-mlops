@@ -1,7 +1,7 @@
 all:
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    ansible_ssh_private_key_file: /home/cc/.ssh/id_rsa_chameleon_ansible
+    ansible_ssh_private_key_file: /home/cc/.ssh/id_rsa
   hosts:
     node1:
       ansible_host: 192.168.1.11
