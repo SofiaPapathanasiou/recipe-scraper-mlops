@@ -27,11 +27,16 @@ all:
       ansible_user: cc
       ip: 192.168.1.15
       access_ip: 192.168.1.15
-    gpu-node:
-      ansible_host: 192.168.1.41
+    gpu-node1:
+      ansible_host: 192.168.1.16
       ansible_user: cc
-      ip: 192.168.1.41
-      access_ip: 192.168.1.41
+      ip: 192.168.1.16
+      access_ip: 192.168.1.16
+    gpu-node2:
+      ansible_host: 192.168.1.17
+      ansible_user: cc
+      ip: 192.168.1.17
+      access_ip: 192.168.1.17
   children:
     kube_control_plane:
       hosts:
@@ -45,7 +50,8 @@ all:
         node3:
         node4:
         node5:
-        gpu-node:
+        gpu-node1:
+        gpu-node2:
     etcd:
       hosts:
         node1:

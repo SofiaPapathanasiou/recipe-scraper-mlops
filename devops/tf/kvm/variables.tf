@@ -41,9 +41,15 @@ variable "reservation_cpu" {
 }
 
 variable "gpu_flavor_id" {
-  description = "Flavor UUID to use for the GPU node"
+  description = "Flavor UUID to use for GPU nodes"
   type        = string
   default     = null
+}
+
+variable "gpu_flavor_ids" {
+  description = "Per-GPU-node flavor UUID map; overrides gpu_flavor_id per node when provided"
+  type        = map(string)
+  default     = {}
 }
 
 variable "reservation_gpu" {
@@ -77,9 +83,10 @@ variable "sharednet1_nodes" {
 }
 
 variable "gpu_nodes" {
-  description = "GPU node brought up separately using gpu_flavor_id"
+  description = "GPU nodes brought up separately using gpu_flavor_id or per-node gpu_flavor_ids"
   type        = map(string)
   default = {
-    "gpu-node" = "192.168.1.16"
+    "gpu-node1" = "192.168.1.16"
+    "gpu-node2" = "192.168.1.17"
   }
 }

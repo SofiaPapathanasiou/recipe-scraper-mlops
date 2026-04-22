@@ -6,8 +6,9 @@ Current defaults in this folder are set up so that:
 
 - `node1` is the only CPU node attached to `sharednet1`
 - `node2` through `node5` are private-network-only
-- the GPU node is skipped when `create_gpu_node=false`
+- GPU nodes are skipped when `create_gpu_node=false`
 - `cpu_flavor_id` and `gpu_flavor_id` are the preferred variable names
+- `gpu_flavor_ids` can override GPU flavor per node (for example `gpu-node1` and `gpu-node2` with different flavors)
 
 ## Prerequisites
 
@@ -32,20 +33,33 @@ This is the current working command set for `KVM@TACC` using:
 
 - NetID: `proj22`
 - CPU flavor ID: `7df7c35e-b47d-4164-a9b7-148ba76885f3`
-- No GPU node creation
+- Two GPU nodes enabled with explicit flavor mapping via env vars
+
+Set vars once:
+
+```bash
+cd /home/cc/recipe-scraper-mlops/devops/tf/kvm
+
+export TF_VAR_openstack_cloud="kvm_tacc"
+export TF_VAR_openstack_region="KVM@TACC"
+export TF_VAR_openstack_endpoint_type="public"
+export TF_VAR_suffix="proj22"
+export TF_VAR_cpu_flavor_id="7df7c35e-b47d-4164-a9b7-148ba76885f3"
+export TF_VAR_create_gpu_node="true"
+
+# Optional fallback flavor used by every GPU node unless overridden below.
+export TF_VAR_gpu_flavor_id=""
+
+# Per-node override map: explicit different flavors for two GPU nodes.
+export TF_VAR_gpu_flavor_ids='{"gpu-node1":"<gpu-flavor-uuid-1>","gpu-node2":"<gpu-flavor-uuid-2>"}'
+```
 
 Plan:
 
 ```bash
 cd /home/cc/recipe-scraper-mlops/devops/tf/kvm
 
-terraform plan \
-  -var="openstack_cloud=kvm_tacc" \
-  -var="openstack_region=KVM@TACC" \
-  -var="openstack_endpoint_type=public" \
-  -var="suffix=proj22" \
-  -var="cpu_flavor_id=7df7c35e-b47d-4164-a9b7-148ba76885f3" \
-  -var="create_gpu_node=false"
+terraform plan
 ```
 
 Apply:
@@ -53,13 +67,7 @@ Apply:
 ```bash
 cd /home/cc/recipe-scraper-mlops/devops/tf/kvm
 
-terraform apply \
-  -var="openstack_cloud=kvm_tacc" \
-  -var="openstack_region=KVM@TACC" \
-  -var="openstack_endpoint_type=public" \
-  -var="suffix=proj22" \
-  -var="cpu_flavor_id=7df7c35e-b47d-4164-a9b7-148ba76885f3" \
-  -var="create_gpu_node=false"
+terraform apply
 ```
 
 ## Clean Up A Partial Failed Apply
@@ -79,6 +87,16 @@ terraform destroy \
   -var="cpu_flavor_id=7df7c35e-b47d-4164-a9b7-148ba76885f3" \
   -var="create_gpu_node=false"
 ```
+
+## GPU Flavor Resolution
+
+Terraform resolves GPU flavors in this order:
+
+1. `gpu_flavor_ids["<gpu-node-name>"]` (per-node explicit override)
+2. `gpu_flavor_id` (shared fallback for all GPU nodes)
+3. `reservation_gpu` (deprecated fallback)
+
+If `create_gpu_node=true`, Terraform requires a resolved non-empty flavor for every GPU node in `gpu_nodes`.
 
 ## Notes
 

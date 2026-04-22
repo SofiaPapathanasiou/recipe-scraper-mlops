@@ -1,11 +1,26 @@
 locals {
   effective_cpu_flavor_id = coalesce(var.cpu_flavor_id, var.reservation_cpu)
   effective_gpu_flavor_id = coalesce(var.gpu_flavor_id, var.reservation_gpu, "")
+  effective_gpu_flavor_ids = {
+    for node_name, _ in var.gpu_nodes :
+    node_name => trimspace(lookup(var.gpu_flavor_ids, node_name, local.effective_gpu_flavor_id))
+  }
+  missing_gpu_flavor_nodes = var.create_gpu_node ? [
+    for node_name, _ in var.gpu_nodes :
+    node_name if local.effective_gpu_flavor_ids[node_name] == ""
+  ] : []
 }
 
 resource "openstack_networking_network_v2" "private_net" {
   name                  = "private-net-recipe-${var.suffix}"
-  port_security_enabled = true
+  port_security_enabled = false
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_gpu_flavor_nodes) == 0
+      error_message = "Missing GPU flavor for nodes: ${join(", ", local.missing_gpu_flavor_nodes)}. Set gpu_flavor_id or gpu_flavor_ids."
+    }
+  }
 }
 
 resource "openstack_networking_subnet_v2" "private_subnet" {
@@ -19,7 +34,7 @@ resource "openstack_networking_port_v2" "private_net_ports" {
   for_each              = var.nodes
   name                  = "port-${each.key}-recipe-${var.suffix}"
   network_id            = openstack_networking_network_v2.private_net.id
-  port_security_enabled = true
+  port_security_enabled = false
 
   fixed_ip {
     subnet_id  = openstack_networking_subnet_v2.private_subnet.id
@@ -31,10 +46,11 @@ resource "openstack_networking_port_v2" "sharednet1_ports" {
   for_each   = { for name, ip in var.nodes : name => ip if contains(var.sharednet1_nodes, name) }
   name       = "sharednet1-${each.key}-recipe-${var.suffix}"
   network_id = data.openstack_networking_network_v2.sharednet1.id
-  security_group_ids = [
+  security_group_ids = concat([
     data.openstack_networking_secgroup_v2.allow_ssh.id,
-    data.openstack_networking_secgroup_v2.allow_http_80.id
-  ]
+    data.openstack_networking_secgroup_v2.allow_http_80.id,
+    data.openstack_networking_secgroup_v2.allow_subnet_traffic_proj22.id
+  ], each.key == "node1" ? [data.openstack_networking_secgroup_v2.allow_nat_proj22.id] : [])
 }
 
 resource "openstack_compute_instance_v2" "nodes" {
@@ -64,12 +80,12 @@ resource "openstack_compute_instance_v2" "nodes" {
 
 }
 
-# GPU node — only created when gpu_flavor_id is provided
+# GPU nodes — created when create_gpu_node=true (flavors validated by precondition)
 resource "openstack_networking_port_v2" "private_net_ports_gpu" {
-  for_each              = var.create_gpu_node && local.effective_gpu_flavor_id != "" ? var.gpu_nodes : {}
+  for_each              = var.create_gpu_node ? var.gpu_nodes : {}
   name                  = "port-${each.key}-recipe-${var.suffix}"
   network_id            = openstack_networking_network_v2.private_net.id
-  port_security_enabled = true
+  port_security_enabled = false
 
   fixed_ip {
     subnet_id  = openstack_networking_subnet_v2.private_subnet.id
@@ -78,21 +94,22 @@ resource "openstack_networking_port_v2" "private_net_ports_gpu" {
 }
 
 resource "openstack_networking_port_v2" "sharednet1_ports_gpu" {
-  for_each   = var.create_gpu_node && local.effective_gpu_flavor_id != "" ? var.gpu_nodes : {}
+  for_each   = var.create_gpu_node ? var.gpu_nodes : {}
   name       = "sharednet1-${each.key}-recipe-${var.suffix}"
   network_id = data.openstack_networking_network_v2.sharednet1.id
   security_group_ids = [
     data.openstack_networking_secgroup_v2.allow_ssh.id,
-    data.openstack_networking_secgroup_v2.allow_http_80.id
+    data.openstack_networking_secgroup_v2.allow_http_80.id,
+    data.openstack_networking_secgroup_v2.allow_subnet_traffic_proj22.id
   ]
 }
 
 resource "openstack_compute_instance_v2" "gpu_node" {
-  for_each = var.create_gpu_node && local.effective_gpu_flavor_id != "" ? var.gpu_nodes : {}
+  for_each = var.create_gpu_node ? var.gpu_nodes : {}
 
   name       = "${each.key}-recipe-${var.suffix}"
   image_name = "CC-Ubuntu24.04"
-  flavor_id  = local.effective_gpu_flavor_id
+  flavor_id  = local.effective_gpu_flavor_ids[each.key]
   key_pair   = var.key
 
   network {
