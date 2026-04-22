@@ -219,3 +219,10 @@ data/reports/*.json
 eval.jsonl
 train.jsonl
 mealie-src/
+
+# Codex Files
+*.codex/
+*.docs/
+
+# Ignore any docs folder (repo-wide)
+docs/

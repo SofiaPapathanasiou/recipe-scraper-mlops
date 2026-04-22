@@ -1,5 +1,4 @@
 ---
-<<<<<<< HEAD
 - name: Apply recipe-scraper workflow resources directly
   hosts: node1
   become: yes
@@ -14,32 +13,11 @@
 
   tasks:
     - name: Clone or update recipe-scraper-mlops repo
-=======
-- name: Clone repo and apply specific Argo WorkflowTemplates
-  hosts: node1
-  become: yes
-  vars:
-    repo_url: https://github.com/teaching-on-testbeds/gourmetgram-iac.git
-    repo_dest: /tmp/gourmetgram-iac
-    workflow_dir: workflows
-    argo_namespace: argo
-    templates:
-      - build-container-image.yaml
-      - deploy-container-image.yaml
-      - promote-model.yaml
-      - train-model.yaml
-      - test-staging.yaml
-      - cron-train.yaml
-
-  tasks:
-    - name: Clone or update gourmetgram-iac repo
->>>>>>> origin/main
       git:
         repo: "{{ repo_url }}"
         dest: "{{ repo_dest }}"
         version: main
 
-<<<<<<< HEAD
     - name: Apply workflow resources
       command: kubectl apply -f {{ repo_dest }}/{{ item }}
       loop: "{{ workflow_files }}"
@@ -51,18 +29,5 @@
       register: wft_list
 
     - name: Show workflow templates
-=======
-    - name: Apply selected WorkflowTemplates to Argo namespace
-      command: kubectl apply -n {{ argo_namespace }} -f {{ repo_dest }}/{{ workflow_dir }}/{{ item }}
-      loop: "{{ templates }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify applied WorkflowTemplates
-      command: kubectl get workflowtemplates -n {{ argo_namespace }}
-      register: wft_list
-
-    - name: Show WorkflowTemplates
->>>>>>> origin/main
       debug:
         var: wft_list.stdout
