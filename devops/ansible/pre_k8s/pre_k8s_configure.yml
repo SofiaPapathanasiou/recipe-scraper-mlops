@@ -417,7 +417,7 @@
         state: restarted
 
 - name: Route private nodes through node1 for outbound package access
-  hosts: node2:node3:node4:node5:gpu-node-chi
+  hosts: node2:node3:node4:node5
   become: yes
   vars:
     node1_private_ip: "{{ hostvars['node1']['ansible_host'] }}"

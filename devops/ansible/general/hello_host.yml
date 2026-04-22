@@ -1,7 +1,7 @@
 ---
 - name: Hello, world - use Ansible to run a command on each host
   hosts: all
-  gather_facts: no
+  gather_facts: yes
 
   vars:
     ssh_private_key_path: "{{ ansible_ssh_private_key_file }}"
