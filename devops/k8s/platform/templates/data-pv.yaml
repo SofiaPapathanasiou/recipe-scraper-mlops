@@ -14,3 +14,20 @@ spec:
   storageClassName: {{ .Values.data.persistence.storageClass | quote }}
   {{- end }}
 {{- end }}
+
+{{- if .Values.triton.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.triton.persistence.claimName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.triton.persistence.size }}
+  storageClassName: {{ .Values.triton.persistence.storageClass }}
+  volumeName: data-pv-gpu-node2
+{{- end }}

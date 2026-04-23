@@ -114,7 +114,12 @@ spec:
 
       volumes:
         - name: triton-models
+          {{- if .Values.triton.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.triton.persistence.claimName }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}
         - name: model-src
           configMap:
             name: triton-model-src

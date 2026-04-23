@@ -190,6 +190,11 @@ trainingJob:
     operator: Exists
   ttlSecondsAfterFinished: 86400
 triton:
+  persistence:
+    enabled: true
+    claimName: data-pvc-gpu-node2
+    size: 50Gi
+    storageClass: local-path
   enabled: true
   nodeSelector:
     kubernetes.io/hostname: gpu-node2
