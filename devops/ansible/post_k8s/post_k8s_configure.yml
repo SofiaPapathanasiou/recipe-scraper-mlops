@@ -64,6 +64,140 @@
       ansible.builtin.debug:
         msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
 
+- name: Stabilize cluster DNS upstream resolvers
+  hosts: node1
+  become: yes
+  vars:
+    dns_namespace: kube-system
+    dns_upstream_resolvers:
+      - 129.114.97.1
+      - 1.1.1.1
+      - 8.8.8.8
+    dns_forward_directive: "forward . {{ dns_upstream_resolvers | join(' ') }}"
+  tasks:
+    - name: Update CoreDNS forwarders to explicit recursive resolvers
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        import subprocess
+        import sys
+
+        namespace = "{{ dns_namespace }}"
+        cm_name = "coredns"
+        target = "{{ dns_forward_directive }}"
+
+        current = subprocess.check_output(
+            ["kubectl", "-n", namespace, "get", "configmap", cm_name, "-o", "json"],
+            text=True,
+        )
+        cm = json.loads(current)
+        corefile = cm.get("data", {}).get("Corefile", "")
+        updated = corefile.replace("forward . /etc/resolv.conf", target)
+
+        if updated == corefile:
+            print("unchanged")
+            raise SystemExit(0)
+
+        cm.setdefault("data", {})["Corefile"] = updated
+        subprocess.run(
+            ["kubectl", "-n", namespace, "apply", "-f", "-"],
+            input=json.dumps(cm, ensure_ascii=True),
+            text=True,
+            check=True,
+        )
+        print("changed")
+        PY
+      args:
+        executable: /bin/bash
+      register: coredns_forwarders_patch
+      changed_when: "'changed' in coredns_forwarders_patch.stdout"
+
+    - name: Update NodeLocalDNS forwarders to explicit recursive resolvers
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        import subprocess
+        import sys
+
+        namespace = "{{ dns_namespace }}"
+        cm_name = "nodelocaldns"
+        target = "{{ dns_forward_directive }}"
+
+        current = subprocess.check_output(
+            ["kubectl", "-n", namespace, "get", "configmap", cm_name, "-o", "json"],
+            text=True,
+        )
+        cm = json.loads(current)
+        corefile = cm.get("data", {}).get("Corefile", "")
+        updated = corefile.replace("forward . /etc/resolv.conf", target)
+
+        if updated == corefile:
+            print("unchanged")
+            raise SystemExit(0)
+
+        cm.setdefault("data", {})["Corefile"] = updated
+        subprocess.run(
+            ["kubectl", "-n", namespace, "apply", "-f", "-"],
+            input=json.dumps(cm, ensure_ascii=True),
+            text=True,
+            check=True,
+        )
+        print("changed")
+        PY
+      args:
+        executable: /bin/bash
+      register: nodelocaldns_forwarders_patch
+      changed_when: "'changed' in nodelocaldns_forwarders_patch.stdout"
+
+    - name: Restart CoreDNS deployment when DNS config changed
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ dns_namespace }}"
+          - rollout
+          - restart
+          - deployment/coredns
+      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
+
+    - name: Wait for CoreDNS rollout when DNS config changed
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ dns_namespace }}"
+          - rollout
+          - status
+          - deployment/coredns
+          - --timeout=180s
+      changed_when: false
+      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
+
+    - name: Restart NodeLocalDNS pods when DNS config changed
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ dns_namespace }}"
+          - delete
+          - pod
+          - -l
+          - k8s-app=node-local-dns
+      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
+
+    - name: Wait for NodeLocalDNS daemonset rollout when DNS config changed
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ dns_namespace }}"
+          - rollout
+          - status
+          - daemonset/nodelocaldns
+          - --timeout=180s
+      changed_when: false
+      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
+
 - name: Install Argo Workflows CLI and prepare GitOps namespace
   hosts: node1
   become: yes
@@ -121,6 +255,85 @@
       ansible.builtin.systemd:
         name: containerd
         state: restarted
+
+- name: Install NVIDIA driver and container toolkit on GPU worker nodes
+  hosts: gpu-node1:gpu-node2
+  become: yes
+  vars:
+    nvidia_driver_package: nvidia-driver-570-server
+    nvidia_toolkit_keyring_path: /etc/apt/keyrings/nvidia-container-toolkit-keyring.gpg
+    nvidia_toolkit_repo_path: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    gpu_reboot_if_driver_changed: false
+  tasks:
+    - name: Ensure apt keyring directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Install NVIDIA driver package and dependencies
+      ansible.builtin.apt:
+        name:
+          - "{{ nvidia_driver_package }}"
+          - curl
+          - ca-certificates
+          - gnupg
+        state: present
+        update_cache: yes
+      register: nvidia_driver_install
+
+    - name: Add NVIDIA container toolkit apt key
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+          gpg --dearmor -o {{ nvidia_toolkit_keyring_path }}
+      args:
+        executable: /bin/bash
+        creates: "{{ nvidia_toolkit_keyring_path }}"
+
+    - name: Add NVIDIA container toolkit apt repository
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+          sed 's#deb https://#deb [signed-by={{ nvidia_toolkit_keyring_path }}] https://#g' \
+          > {{ nvidia_toolkit_repo_path }}
+      args:
+        executable: /bin/bash
+        creates: "{{ nvidia_toolkit_repo_path }}"
+
+    - name: Install NVIDIA container toolkit
+      ansible.builtin.apt:
+        name: nvidia-container-toolkit
+        state: present
+        update_cache: yes
+
+    - name: Configure NVIDIA runtime for containerd
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=containerd
+      register: nvidia_runtime_config
+      changed_when: "'Wrote updated config' in nvidia_runtime_config.stdout"
+
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+      when: nvidia_runtime_config.changed
+
+    - name: Reboot GPU node when driver changed (optional)
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        connect_timeout: 30
+      when:
+        - gpu_reboot_if_driver_changed | bool
+        - nvidia_driver_install.changed
+
+    - name: Verify nvidia-smi is available
+      ansible.builtin.command: nvidia-smi -L
+      register: nvidia_smi_output
+      changed_when: false
+
+    - name: Show discovered GPUs
+      ansible.builtin.debug:
+        msg: "{{ nvidia_smi_output.stdout_lines }}"
 
 - name: Bootstrap NVIDIA GPU support
   hosts: node1
