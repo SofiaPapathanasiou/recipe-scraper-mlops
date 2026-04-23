@@ -192,7 +192,7 @@ trainingJob:
 triton:
   enabled: true
   nodeSelector:
-    kubernetes.io/hostname: gpu-node-chi
+    kubernetes.io/hostname: gpu-node2
   image:
     pullPolicy: IfNotPresent
     repository: graceritamcgrath/triton-custom

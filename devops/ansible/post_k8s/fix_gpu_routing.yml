@@ -29,12 +29,78 @@
       args:
         executable: /bin/bash
 
-    - name: Make route persistent in WireGuard PostUp
+    - name: Ensure 192.168.1.18 routes via wg0 on node1
+      ansible.builtin.shell: |
+        ip route replace 192.168.1.18 dev wg0
+      args:
+        executable: /bin/bash
+
+    - name: Add iptables forwarding rules for WireGuard on node1
+      ansible.builtin.shell: |
+        iptables -C FORWARD -i ens4 -o wg0 -j ACCEPT 2>/dev/null || iptables -A FORWARD -i ens4 -o wg0 -j ACCEPT
+        iptables -C FORWARD -i wg0 -o ens4 -j ACCEPT 2>/dev/null || iptables -A FORWARD -i wg0 -o ens4 -j ACCEPT
+        iptables -t nat -C POSTROUTING -s 192.168.1.0/24 -o wg0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o wg0 -j MASQUERADE
+      args:
+        executable: /bin/bash
+
+    - name: Make pod CIDR route persistent in WireGuard PostUp
       ansible.builtin.lineinfile:
         path: /etc/wireguard/wg0.conf
         insertafter: "ListenPort"
         line: "PostUp = ip route replace {{ pod_cidr.stdout }} dev wg0"
         state: present
+
+- name: Fix routing and iptables on gpu-node-chi
+  hosts: gpu-node-chi
+  become: yes
+  vars:
+    pod_cidr: "{{ hostvars['node1']['pod_cidr']['stdout'] }}"
+  tasks:
+    - name: Disable rp_filter on wg0
+      ansible.builtin.sysctl:
+        name: net.ipv4.conf.wg0.rp_filter
+        value: '0'
+        state: present
+        reload: yes
+
+    - name: Disable rp_filter on all interfaces
+      ansible.builtin.sysctl:
+        name: net.ipv4.conf.all.rp_filter
+        value: '0'
+        state: present
+        reload: yes
+
+    - name: Add WireGuard routes on gpu-node-chi
+      ansible.builtin.shell: |
+        ip route replace 192.168.1.0/24 dev wg0
+        ip route replace 10.233.0.0/16 dev wg0
+      args:
+        executable: /bin/bash
+
+    - name: Fix kubelet.conf to use node1 API server
+      ansible.builtin.replace:
+        path: /etc/kubernetes/kubelet.conf
+        regexp: 'server: https://localhost:6443'
+        replace: 'server: https://192.168.1.11:6443'
+
+    - name: Accept WireGuard OUTPUT traffic before Calico
+      ansible.builtin.shell: |
+        iptables -C OUTPUT -o wg0 -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -o wg0 -j ACCEPT
+        iptables -C INPUT -i wg0 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i wg0 -j ACCEPT
+      args:
+        executable: /bin/bash
+
+    - name: Add MASQUERADE for pod traffic to cluster network
+      ansible.builtin.shell: |
+        iptables -t nat -C POSTROUTING -o wg0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE
+        iptables -t nat -C POSTROUTING -s {{ pod_cidr }} -d 10.233.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s {{ pod_cidr }} -d 10.233.0.0/16 -j MASQUERADE
+      args:
+        executable: /bin/bash
+
+    - name: Restart kubelet after config fix
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
 
 - name: Fix routing on CPU worker nodes
   hosts: node2:node3:node4:node5
