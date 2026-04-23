@@ -5,3 +5,4 @@ resources:
   - rbac.yaml
   - workflow-template-training.yaml
   - cronworkflow-retraining.yaml
+  - mlflow-model-promoter.yaml
