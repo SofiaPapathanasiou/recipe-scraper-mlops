@@ -1,0 +1,62 @@
+---
+- name: Fix routing for gpu-node-chi pod CIDR
+  hosts: node1
+  become: yes
+  tasks:
+    - name: Get gpu-node-chi pod CIDR
+      ansible.builtin.command: kubectl get node gpu-node-chi -o jsonpath='{.spec.podCIDR}'
+      register: pod_cidr
+      become_user: cc
+
+    - name: Show pod CIDR
+      ansible.builtin.debug:
+        msg: "gpu-node-chi pod CIDR: {{ pod_cidr.stdout }}"
+
+    - name: Replace Calico VXLAN route with WireGuard route on node1
+      ansible.builtin.shell: |
+        ip route replace {{ pod_cidr.stdout }} dev wg0
+      args:
+        executable: /bin/bash
+
+    - name: Make route persistent in WireGuard PostUp
+      ansible.builtin.lineinfile:
+        path: /etc/wireguard/wg0.conf
+        insertafter: "ListenPort"
+        line: "PostUp = ip route replace {{ pod_cidr.stdout }} dev wg0"
+        state: present
+
+- name: Fix routing on CPU worker nodes
+  hosts: node2:node3:node4:node5
+  become: yes
+  vars:
+    pod_cidr: "{{ hostvars['node1']['pod_cidr']['stdout'] }}"
+  tasks:
+    - name: Replace Calico VXLAN route via node1
+      ansible.builtin.shell: |
+        ip route replace {{ pod_cidr }} via 192.168.1.11 dev ens3
+      args:
+        executable: /bin/bash
+
+    - name: Make route persistent in private-route script
+      ansible.builtin.lineinfile:
+        path: /usr/local/sbin/configure-private-default-route.sh
+        line: "ip route replace {{ pod_cidr }} via ${GATEWAY_IP} dev ${PRIVATE_IF}"
+        state: present
+
+- name: Fix routing on KVM GPU nodes
+  hosts: gpu-node1:gpu-node2
+  become: yes
+  vars:
+    pod_cidr: "{{ hostvars['node1']['pod_cidr']['stdout'] }}"
+  tasks:
+    - name: Replace Calico VXLAN route via node1
+      ansible.builtin.shell: |
+        ip route replace {{ pod_cidr }} via 192.168.1.11 dev ens4
+      args:
+        executable: /bin/bash
+
+    - name: Make route persistent in private-route script
+      ansible.builtin.lineinfile:
+        path: /usr/local/sbin/configure-private-default-route.sh
+        line: "ip route replace {{ pod_cidr }} via 192.168.1.11 dev ens4"
+        state: present

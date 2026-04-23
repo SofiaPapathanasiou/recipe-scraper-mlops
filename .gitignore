@@ -226,3 +226,5 @@ mealie-src/
 
 # Ignore any docs folder (repo-wide)
 docs/
+8080
+kubectl
