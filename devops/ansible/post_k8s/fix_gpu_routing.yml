@@ -4,7 +4,18 @@
   become: yes
   tasks:
     - name: Get gpu-node-chi pod CIDR
-      ansible.builtin.command: kubectl get node gpu-node-chi -o jsonpath='{.spec.podCIDR}'
+      ansible.builtin.shell: |
+        python3 - <<'EOF'
+        import subprocess, json
+        out = subprocess.check_output(["kubectl", "get", "node", "gpu-node-chi", "-o", "json"], text=True)
+        node = json.loads(out)
+        cidr = node["spec"].get("podCIDR", "")
+        if not cidr:
+            tunnel = node["metadata"]["annotations"].get("projectcalico.org/IPv4VXLANTunnelAddr", "")
+            parts = tunnel.split(".")
+            cidr = f"{parts[0]}.{parts[1]}.{parts[2]}.0/26"
+        print(cidr)
+        EOF
       register: pod_cidr
       become_user: cc
 
