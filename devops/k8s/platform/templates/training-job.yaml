@@ -153,13 +153,21 @@ spec:
               artifact_endpoint = os.getenv("MLFLOW_S3_ENDPOINT_URL", "").strip()
               check_artifact_store = {{ ternary "True" "False" .Values.trainingJob.mlflowPreflight.checkArtifactStore }}
 
-              def resolve_host(target: str) -> None:
+              def resolve_host(target: str, *, attempts: int = 30, delay: int = 2) -> None:
                   parsed = urllib.parse.urlparse(target)
                   host = parsed.hostname or target
                   if not host:
                       raise RuntimeError(f"Could not determine host for {target!r}")
-                  socket.getaddrinfo(host, parsed.port)
-                  print(f"Resolved {host}")
+                  last_error = None
+                  for _ in range(attempts):
+                      try:
+                          socket.getaddrinfo(host, parsed.port)
+                          print(f"Resolved {host}")
+                          return
+                      except Exception as exc:
+                          last_error = exc
+                      time.sleep(delay)
+                  raise RuntimeError(f"Timed out resolving {host}: {last_error}")
 
               def wait_for_http(target: str, *, attempts: int = 60, delay: int = 2) -> None:
                   last_error = None
