@@ -36,7 +36,7 @@ spec:
       - name: train-extra-args
         value: ""
       - name: mlflow-tracking-uri
-        value: http://129.114.26.25:30800/
+        value: http://192.168.1.11:30800/
       - name: mlflow-artifact-secret
         value: mlflow-s3-credentials
       - name: mlflow-s3-endpoint-url
