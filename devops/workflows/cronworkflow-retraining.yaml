@@ -26,3 +26,23 @@ spec:
           value: /app/config/config.yaml
         - name: pvc-name
           value: data-pvc-gpu
+        - name: data-dir
+          value: /data
+        - name: num-processes
+          value: "1"
+        - name: train-jsonl-path
+          value: /data/training/train.jsonl
+        - name: eval-jsonl-path
+          value: /data/training/eval.jsonl
+        - name: checkpoint-dir
+          value: /data/checkpoints/recipe-correction
+        - name: hf-cache-dir
+          value: /data/checkpoints/huggingface-cache
+        - name: train-extra-args
+          value: --experiment-name recipe-correction-t5-baseline
+        - name: mlflow-tracking-uri
+          value: http://192.168.1.11:30800/
+        - name: mlflow-artifact-secret
+          value: mlflow-s3-credentials
+        - name: check-artifact-store
+          value: "true"
