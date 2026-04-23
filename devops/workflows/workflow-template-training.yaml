@@ -11,14 +11,6 @@ spec:
   ttlStrategy:
     secondsAfterSuccess: 86400
     secondsAfterFailure: 86400
-  volumes:
-    - name: training-data
-      persistentVolumeClaim:
-        claimName: "{{workflow.parameters.pvc-name}}"
-    - name: dshm
-      emptyDir:
-        medium: Memory
-        sizeLimit: 16Gi
   arguments:
     parameters:
       - name: training-image
@@ -169,6 +161,14 @@ spec:
             value: "{{workflow.parameters.train-extra-args}}"
           - name: mlflow-tracking-uri
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: "{{workflow.parameters.pvc-name}}"
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
       metadata:
         annotations:
           recipe-scraper-mlops/gpu-blocked-note: "This pod is pinned to gpu-node1 for training and uses the shared data-pvc-gpu claim by default."
@@ -180,22 +180,18 @@ spec:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
-        containers:
-          - name: main
-            volumeMounts:
-              - mountPath: /dev/shm
-                name: dshm
-          - name: resource-monitor
-            image: nvidia/cuda:12.4.1-base-ubuntu22.04
-            command: ["/bin/sh", "-c"]
-            args:
-              - |
-                while true; do
-                  echo "--- [$(date)] RESOURCE CHECK ---"
-                  free -m
-                  nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv,noheader
-                  sleep 15
-                done
+      sidecars:
+        - name: resource-monitor
+          image: nvidia/cuda:12.4.1-base-ubuntu22.04
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                echo "--- [$(date)] RESOURCE CHECK ---"
+                free -m
+                nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv,noheader
+                sleep 15
+              done
       container:
         name: main
         image: "{{inputs.parameters.training-image}}"
@@ -247,6 +243,8 @@ spec:
         volumeMounts:
           - name: training-data
             mountPath: "{{inputs.parameters.data-dir}}"
+          - name: dshm
+            mountPath: /dev/shm
         resources:
           requests:
             cpu: "2"
