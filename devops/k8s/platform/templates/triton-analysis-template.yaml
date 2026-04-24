@@ -31,11 +31,13 @@ spec:
         prometheus:
           address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
           query: |
-            sum(rate(nv_inference_request_failure[1h]))
-            /
-            (
-              sum(rate(nv_inference_request_success[1h])) +
+            scalar(
               sum(rate(nv_inference_request_failure[1h]))
+              /
+              (
+                sum(rate(nv_inference_request_success[1h])) +
+                sum(rate(nv_inference_request_failure[1h]))
+              )
             )
     - name: triton-latency
       interval: 2m
@@ -46,6 +48,8 @@ spec:
         prometheus:
           address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
           query: |
-            rate(nv_inference_request_duration_us[1h])
-            /
-            rate(nv_inference_request_success[1h])
+            scalar(
+              rate(nv_inference_request_duration_us[1h])
+              /
+              rate(nv_inference_request_success[1h])
+            )
