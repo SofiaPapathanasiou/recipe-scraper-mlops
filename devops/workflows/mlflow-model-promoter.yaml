@@ -24,7 +24,37 @@ spec:
         command: [sh, -c]
         args:
         - |
-          git clone https://$(cat /git-credentials/token)@github.com/SofiaPapathanasiou/recipe-scraper-mlops.git /workspace
+          set -eu
+          TOKEN="$(cat /git-credentials/token)"
+          REPO_URL="https://${TOKEN}@github.com/SofiaPapathanasiou/recipe-scraper-mlops.git"
+          MAX_ATTEMPTS=8
+          ATTEMPT=1
+          BACKOFF=1
+
+          while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+            echo "git clone attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+            if git clone "$REPO_URL" /workspace; then
+              echo "git clone succeeded"
+              exit 0
+            fi
+
+            if [ "$ATTEMPT" -eq "$MAX_ATTEMPTS" ]; then
+              echo "git clone failed after ${MAX_ATTEMPTS} attempts"
+              exit 1
+            fi
+
+            echo "git clone failed; retrying in ${BACKOFF}s"
+            sleep "$BACKOFF"
+
+            # Ensure next clone attempt starts with a clean destination.
+            rm -rf /workspace/* /workspace/.[!.]* /workspace/..?* 2>/dev/null || true
+
+            ATTEMPT=$((ATTEMPT + 1))
+            BACKOFF=$((BACKOFF * 2))
+            if [ "$BACKOFF" -gt 30 ]; then
+              BACKOFF=30
+            fi
+          done
         volumeMounts:
         - name: workspace
           mountPath: /workspace
