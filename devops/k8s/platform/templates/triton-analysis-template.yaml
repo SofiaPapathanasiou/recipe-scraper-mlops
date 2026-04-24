@@ -14,12 +14,14 @@ spec:
         prometheus:
           address: http://prometheus-svc.recipe-scraper-platform.svc.cluster.local:9090
           query: |
-            sum(rate(model_feedback_negative_total[12h]))
-            /
-            (
-              sum(rate(model_feedback_positive_total[12h])) +
-              sum(rate(model_feedback_negative_total[12h]))
-            )
+              scalar(
+                sum(rate(model_feedback_negative_total[12h]))
+                /
+                (
+                  sum(rate(model_feedback_positive_total[12h])) +
+                  sum(rate(model_feedback_negative_total[12h]))
+                )
+              )
     - name: triton-error-rate
       interval: 2m
       count: 3

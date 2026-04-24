@@ -71,7 +71,7 @@ spec:
         - name: triton
           env:
             - name: VERSION
-              value: "v3"
+              value: "v4"
           image: "{{ .Values.triton.image.repository }}:{{ .Values.triton.image.tag }}"
           imagePullPolicy: {{ .Values.triton.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
