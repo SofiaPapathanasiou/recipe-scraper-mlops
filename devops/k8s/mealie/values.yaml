@@ -37,3 +37,7 @@ resources:
   requests:
     cpu: "500m"
     memory: "512Mi"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

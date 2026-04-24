@@ -6,3 +6,13 @@ env:
   extra:
     - name: RECIPE_SCRAPER_ENV
       value: staging
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values:
+                - node1
