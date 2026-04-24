@@ -13,6 +13,9 @@ spec:
   {{- if .Values.data.persistence.storageClass }}
   storageClassName: {{ .Values.data.persistence.storageClass | quote }}
   {{- end }}
+  {{- if .Values.data.persistence.volumeName }}
+  volumeName: {{ .Values.data.persistence.volumeName | quote }}
+  {{- end }}
 {{- end }}
 
 {{- if .Values.triton.persistence.enabled }}

@@ -17,11 +17,12 @@ data:
       tag: latest
     mountPath: /data
   persistence:
-    accessMode: ReadWriteMany
+    accessMode: ReadWriteOnce
     claimName: data-pvc-gpu
     enabled: true
-    size: 10Gi
-    storageClass: ''
+    size: 50Gi
+    storageClass: local-path
+    volumeName: data-pv-gpu-node1
   trainingQuality:
     enabled: false
     existingClaim: data-pvc-gpu
