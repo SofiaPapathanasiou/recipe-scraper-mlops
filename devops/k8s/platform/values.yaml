@@ -190,6 +190,7 @@ trainingJob:
     operator: Exists
   ttlSecondsAfterFinished: 86400
 triton:
+  runtimeClassName: nvidia
   persistence:
     enabled: true
     claimName: data-pvc-gpu-node2
@@ -213,7 +214,7 @@ triton:
       memory: 12Gi
     requests:
       cpu: '2'
-      ephemeral-storage: 5Gi
+      ephemeral-storage: 2Gi
       memory: 8Gi
   rollout:
     maxSurge: 0
