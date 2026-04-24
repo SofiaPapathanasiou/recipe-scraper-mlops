@@ -45,6 +45,18 @@ containerd_registries_mirrors:
         capabilities: ["pull", "resolve"]
         skip_verify: true
 
+# Cluster DNS upstreams: node1 primary resolver + public recursive fallback.
+upstream_dns_servers:
+  - 192.168.1.11
+  - 1.1.1.1
+  - 8.8.8.8
+
+# Prefer primary and fail over deterministically.
+dns_upstream_forward_extra_opts:
+  policy: sequential
+  health_check: 5s
+  max_fails: 1
+
 # Configure an explicit NVIDIA runtime for GPU workloads on containerd-backed nodes.
 # Pods opt into this via runtimeClassName: nvidia instead of changing the node-wide
 # default runtime for every container on GPU nodes.

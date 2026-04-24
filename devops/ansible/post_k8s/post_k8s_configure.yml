@@ -64,140 +64,6 @@
       ansible.builtin.debug:
         msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
 
-- name: Stabilize cluster DNS upstream resolvers
-  hosts: node1
-  become: yes
-  vars:
-    dns_namespace: kube-system
-    dns_upstream_resolvers:
-      - 129.114.97.1
-      - 1.1.1.1
-      - 8.8.8.8
-    dns_forward_directive: "forward . {{ dns_upstream_resolvers | join(' ') }}"
-  tasks:
-    - name: Update CoreDNS forwarders to explicit recursive resolvers
-      ansible.builtin.shell: |
-        python3 - <<'PY'
-        import json
-        import subprocess
-        import sys
-
-        namespace = "{{ dns_namespace }}"
-        cm_name = "coredns"
-        target = "{{ dns_forward_directive }}"
-
-        current = subprocess.check_output(
-            ["kubectl", "-n", namespace, "get", "configmap", cm_name, "-o", "json"],
-            text=True,
-        )
-        cm = json.loads(current)
-        corefile = cm.get("data", {}).get("Corefile", "")
-        updated = corefile.replace("forward . /etc/resolv.conf", target)
-
-        if updated == corefile:
-            print("unchanged")
-            raise SystemExit(0)
-
-        cm.setdefault("data", {})["Corefile"] = updated
-        subprocess.run(
-            ["kubectl", "-n", namespace, "apply", "-f", "-"],
-            input=json.dumps(cm, ensure_ascii=True),
-            text=True,
-            check=True,
-        )
-        print("changed")
-        PY
-      args:
-        executable: /bin/bash
-      register: coredns_forwarders_patch
-      changed_when: "'changed' in coredns_forwarders_patch.stdout"
-
-    - name: Update NodeLocalDNS forwarders to explicit recursive resolvers
-      ansible.builtin.shell: |
-        python3 - <<'PY'
-        import json
-        import subprocess
-        import sys
-
-        namespace = "{{ dns_namespace }}"
-        cm_name = "nodelocaldns"
-        target = "{{ dns_forward_directive }}"
-
-        current = subprocess.check_output(
-            ["kubectl", "-n", namespace, "get", "configmap", cm_name, "-o", "json"],
-            text=True,
-        )
-        cm = json.loads(current)
-        corefile = cm.get("data", {}).get("Corefile", "")
-        updated = corefile.replace("forward . /etc/resolv.conf", target)
-
-        if updated == corefile:
-            print("unchanged")
-            raise SystemExit(0)
-
-        cm.setdefault("data", {})["Corefile"] = updated
-        subprocess.run(
-            ["kubectl", "-n", namespace, "apply", "-f", "-"],
-            input=json.dumps(cm, ensure_ascii=True),
-            text=True,
-            check=True,
-        )
-        print("changed")
-        PY
-      args:
-        executable: /bin/bash
-      register: nodelocaldns_forwarders_patch
-      changed_when: "'changed' in nodelocaldns_forwarders_patch.stdout"
-
-    - name: Restart CoreDNS deployment when DNS config changed
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - -n
-          - "{{ dns_namespace }}"
-          - rollout
-          - restart
-          - deployment/coredns
-      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
-
-    - name: Wait for CoreDNS rollout when DNS config changed
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - -n
-          - "{{ dns_namespace }}"
-          - rollout
-          - status
-          - deployment/coredns
-          - --timeout=180s
-      changed_when: false
-      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
-
-    - name: Restart NodeLocalDNS pods when DNS config changed
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - -n
-          - "{{ dns_namespace }}"
-          - delete
-          - pod
-          - -l
-          - k8s-app=node-local-dns
-      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
-
-    - name: Wait for NodeLocalDNS daemonset rollout when DNS config changed
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - -n
-          - "{{ dns_namespace }}"
-          - rollout
-          - status
-          - daemonset/nodelocaldns
-          - --timeout=180s
-      changed_when: false
-      when: coredns_forwarders_patch.changed or nodelocaldns_forwarders_patch.changed
-
 - name: Install Argo Workflows CLI and prepare GitOps namespace
   hosts: node1
   become: yes
@@ -440,3 +306,59 @@
           - --ignore-not-found=true
       changed_when: false
       when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+
+- name: Enforce Calico host policy required for NodeLocal DNS + service DNS reachability
+  hosts: node1
+  become: yes
+  vars:
+    calico_allow_wireguard_policy_manifest: /tmp/calico-allow-wireguard-policy.yaml
+  tasks:
+    - name: Check whether Calico GlobalNetworkPolicy CRD exists
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - crd
+          - globalnetworkpolicies.crd.projectcalico.org
+      register: calico_gnp_crd
+      changed_when: false
+      failed_when: false
+
+    - name: Write Calico allow-wireguard GlobalNetworkPolicy manifest
+      ansible.builtin.copy:
+        dest: "{{ calico_allow_wireguard_policy_manifest }}"
+        mode: "0644"
+        content: |
+          apiVersion: crd.projectcalico.org/v1
+          kind: GlobalNetworkPolicy
+          metadata:
+            name: allow-wireguard
+          spec:
+            order: 0
+            selector: all()
+            ingress:
+              - action: Allow
+                source:
+                  nets:
+                    - 192.168.1.0/24
+                    - 10.233.0.0/18
+                    - 10.233.64.0/18
+                    - 169.254.25.10/32
+            egress:
+              - action: Allow
+                destination:
+                  nets:
+                    - 192.168.1.0/24
+                    - 10.233.0.0/18
+                    - 10.233.64.0/18
+                    - 169.254.25.10/32
+      when: calico_gnp_crd.rc == 0
+
+    - name: Apply Calico allow-wireguard GlobalNetworkPolicy
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ calico_allow_wireguard_policy_manifest }}"
+      when: calico_gnp_crd.rc == 0
