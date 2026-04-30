@@ -10,6 +10,14 @@ spec:
     spec:
       template:
         spec:
+{{- with .Values.data.driftMonitor.nodeSelector }}
+          nodeSelector:
+{{ toYaml . | indent 12 }}
+{{- end }}
+{{- with .Values.data.driftMonitor.tolerations }}
+          tolerations:
+{{ toYaml . | indent 12 }}
+{{- end }}
           restartPolicy: OnFailure
           containers:
             - name: drift-monitor

@@ -6,9 +6,9 @@ metadata:
   annotations:
     recipe-scraper-mlops/status: "Scheduled retraining uses the shared recipe-model-training WorkflowTemplate and defaults to the shared data-pvc-gpu claim."
 spec:
-  schedule: "0 3 * * 1"
+  schedule: "0 23 * * 1"
   timezone: Etc/UTC
-  suspend: true
+  suspend: false
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3

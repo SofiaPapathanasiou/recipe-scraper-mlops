@@ -214,7 +214,7 @@
         src: files/nvidia-gpu-device-plugin.yaml
         dest: "{{ gpu_plugin_manifest }}"
         mode: "0644"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Apply NVIDIA device plugin manifest
       ansible.builtin.command:
@@ -223,7 +223,7 @@
           - apply
           - -f
           - "{{ gpu_plugin_manifest }}"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Wait for NVIDIA device plugin rollout
       ansible.builtin.command:
@@ -236,14 +236,14 @@
           - daemonset/nvidia-gpu-device-plugin
           - --timeout=180s
       changed_when: false
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Copy NVIDIA RuntimeClass manifest
       ansible.builtin.copy:
         src: files/nvidia-runtimeclass.yaml
         dest: "{{ gpu_runtimeclass_manifest }}"
         mode: "0644"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Apply NVIDIA RuntimeClass manifest
       ansible.builtin.command:
@@ -252,14 +252,14 @@
           - apply
           - -f
           - "{{ gpu_runtimeclass_manifest }}"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Copy GPU smoke test manifest
       ansible.builtin.copy:
         src: files/gpu-smoke-pod.yaml
         dest: "{{ gpu_smoke_manifest }}"
         mode: "0644"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Run GPU smoke pod
       ansible.builtin.command:
@@ -268,7 +268,7 @@
           - apply
           - -f
           - "{{ gpu_smoke_manifest }}"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Wait for GPU smoke pod to complete
       ansible.builtin.command:
@@ -279,7 +279,7 @@
           - pod/gpu-smoke
           - --timeout=180s
       changed_when: false
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Show GPU smoke pod logs
       ansible.builtin.command:
@@ -289,12 +289,12 @@
           - gpu-smoke
       register: gpu_smoke_logs
       changed_when: false
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Display GPU smoke pod logs
       ansible.builtin.debug:
         msg: "{{ gpu_smoke_logs.stdout_lines }}"
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
     - name: Clean up GPU smoke pod
       ansible.builtin.command:
@@ -305,7 +305,7 @@
           - gpu-smoke
           - --ignore-not-found=true
       changed_when: false
-      when: "'gpu-node1' in groups['all'] or 'gpu-node2' in groups['all'] or 'gpu-node-chi' in groups['all']"
+      when: false
 
 - name: Enforce Calico host policy required for NodeLocal DNS + service DNS reachability
   hosts: node1

@@ -1,7 +1,9 @@
+
 data:
   driftMonitor:
-    enabled: false
+    enabled: true
     existingClaim: ''
+    nodeSelector: {}
     resources:
       limits:
         cpu: 500m
@@ -10,6 +12,10 @@ data:
         cpu: 100m
         memory: 256Mi
     schedule: 0 * * * *
+    tolerations:
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      operator: Exists
   jobs:
     image:
       pullPolicy: IfNotPresent
@@ -24,7 +30,7 @@ data:
     storageClass: local-path
     volumeName: data-pv-gpu-node1
   trainingQuality:
-    enabled: false
+    enabled: true
     existingClaim: data-pvc-gpu
     nodeSelector: {}
     resources:
@@ -136,17 +142,17 @@ trainingJob:
   activeDeadlineSeconds: null
   annotations: {}
   backoffLimit: 0
-  enabled: false
+  enabled: true
   description: Fallback single-pod Kubernetes Job for smoke tests; prefer manual and scheduled Argo Workflows for real training runs.
   env:
     checkpointDir: /data/checkpoints/recipe-correction
     dataDir: /data
-    evalJsonlPath: ''
+    evalJsonlPath:  '/data/eval.jsonl'
     extraArgs: ''
     hfCacheDir: /data/checkpoints/huggingface-cache
     numProcesses: '1'
     trainConfig: /app/config/config.yaml
-    trainJsonlPath: ''
+    trainJsonlPath: '/data/train.jsonl'
     trainMode: train
     trainScript: /app/train.py
   image:
