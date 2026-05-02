@@ -30,6 +30,8 @@ spec:
         value: /data/checkpoints/huggingface-cache
       - name: train-extra-args
         value: --experiment-name recipe-training-manual
+      - name: git-commit-hash
+        value: unknown
       - name: mlflow-tracking-uri
         value: http://192.168.1.11:30800/
       - name: mlflow-artifact-secret

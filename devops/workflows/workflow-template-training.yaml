@@ -35,6 +35,8 @@ spec:
         value: ""
       - name: train-extra-args
         value: ""
+      - name: git-commit-hash
+        value: unknown
       - name: mlflow-tracking-uri
         value: http://192.168.1.11:30800/
       - name: mlflow-artifact-secret
@@ -172,6 +174,8 @@ spec:
             value: "{{workflow.parameters.eval-jsonl-path}}"
           - name: train-extra-args
             value: "{{workflow.parameters.train-extra-args}}"
+          - name: git-commit-hash
+            value: "{{workflow.parameters.git-commit-hash}}"
           - name: mlflow-tracking-uri
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
       volumes:
@@ -193,6 +197,23 @@ spec:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
+      initContainers:
+        - name: prepare-training-dirs
+          image: "{{inputs.parameters.training-image}}"
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              mkdir -p "{{inputs.parameters.checkpoint-dir}}" "{{inputs.parameters.hf-cache-dir}}/datasets" "{{inputs.parameters.hf-cache-dir}}/assets"
+              chown -R 1000:1000 "$(dirname "{{inputs.parameters.checkpoint-dir}}")"
+              chmod -R ug+rwX "$(dirname "{{inputs.parameters.checkpoint-dir}}")"
+          volumeMounts:
+            - name: training-data
+              mountPath: "{{inputs.parameters.data-dir}}"
       sidecars:
         - name: resource-monitor
           image: nvidia/cuda:12.4.1-base-ubuntu22.04
@@ -253,6 +274,8 @@ spec:
             value: "{{inputs.parameters.num-processes}}"
           - name: TRAIN_EXTRA_ARGS
             value: "{{inputs.parameters.train-extra-args}}"
+          - name: GIT_COMMIT_HASH
+            value: "{{inputs.parameters.git-commit-hash}}"
         volumeMounts:
           - name: training-data
             mountPath: "{{inputs.parameters.data-dir}}"
