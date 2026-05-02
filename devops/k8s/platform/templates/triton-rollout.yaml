@@ -134,7 +134,6 @@ spec:
       maxSurge: {{ .Values.triton.rollout.maxSurge }}
       maxUnavailable: {{ .Values.triton.rollout.maxUnavailable }}
       steps:
-        - setWeight: 20
         - pause:
             duration: 120s
         - analysis:
@@ -142,8 +141,7 @@ spec:
               - templateName: recipe-triton-analysis
             args:
             - name: model-version
-              value: "{{ .Values.triton.image.tag }}"  
-        - setWeight: 50
+              value: "{{ .Values.triton.image.tag }}" 
         - pause:
             duration: 120s
         - analysis:
@@ -152,5 +150,4 @@ spec:
             args:
             - name: model-version
               value: "{{ .Values.triton.image.tag }}"
-        - setWeight: 100
 {{- end }}
