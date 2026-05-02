@@ -47,7 +47,7 @@ data:
       operator: Exists
 grafana:
   adminPassword: admin
-  enabled: false
+  enabled: true
   image:
     pullPolicy: IfNotPresent
     repository: grafana/grafana
@@ -142,7 +142,7 @@ trainingJob:
   activeDeadlineSeconds: null
   annotations: {}
   backoffLimit: 0
-  enabled: true
+  enabled: false
   description: Fallback single-pod Kubernetes Job for smoke tests; prefer manual and scheduled Argo Workflows for real training runs.
   env:
     checkpointDir: /data/checkpoints/recipe-correction
